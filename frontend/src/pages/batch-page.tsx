@@ -1,9 +1,12 @@
 import { useCallback, useEffect, useState } from "react"
-import { Check, Clapperboard, Download, FileText, Film, Loader2, Mic, Play, RefreshCw, Rocket, Sparkles } from "lucide-react"
+import { Check, Clapperboard, Download, FileText, Film, Loader2, Mic, Play, Plus, RefreshCw, Rocket, Sparkles } from "lucide-react"
 import { AnimatePresence, motion } from "motion/react"
 import { toast } from "sonner"
 
 import { LangBar, LangTag, StatusBadge } from "@/components/bits"
+import { ClipSources } from "@/components/clip-sources"
+import { DeleteProject, ProjectMissing } from "@/components/delete-project"
+import { useUploadQueue } from "@/components/upload-queue"
 import { CountUp, ease, GrowBar, Stagger, StaggerItem } from "@/components/motion"
 import {
   AlertDialog,
@@ -36,18 +39,29 @@ interface Data {
 export function BatchPage({ batch, tab }: { batch: string; tab: "scripts" | "clips" }) {
   const { watch, version, active } = useJobs()
   const [data, setData] = useState<Data | null>(null)
+  const [missing, setMissing] = useState(false)
 
   const load = useCallback(async () => {
-    const [batches, stats, scripts, clips] = await Promise.all([
-      api.batches(), api.stats(batch), api.scripts(batch), api.clips(batch),
-    ])
-    const b = batches.find((x) => x.batch === batch)
-    if (b) setData({ batch: b, stats, scripts, clips })
+    const b = (await api.batches()).find((x) => x.batch === batch)
+    if (!b) return setMissing(true)   // 项目不存在或刚被删掉
+    const [stats, scripts, clips] = await Promise.all([api.stats(batch), api.scripts(batch), api.clips(batch)])
+    setMissing(false)
+    setData({ batch: b, stats, scripts, clips })
   }, [batch])
 
   useEffect(() => {
     setData(null)
+    setMissing(false)
   }, [batch])
+  const refresh = useCallback(() => {
+    load().catch(() => {})
+    window.dispatchEvent(new Event("jh:refresh"))
+  }, [load])
+  const queue = useUploadQueue(batch, refresh)
+  const addMaterial = () => {
+    go({ page: "batch", batch, tab: "clips" })
+    setTimeout(() => document.getElementById("clip-sources")?.scrollIntoView({ behavior: "smooth", block: "center" }), 350)
+  }
   useEffect(() => {
     load().catch((e) => toast.error("加载失败", { description: String(e) }))
   }, [load, version])
@@ -75,6 +89,7 @@ export function BatchPage({ batch, tab }: { batch: string; tab: "scripts" | "cli
     list.forEach((j) => watch(j, (job) => toast.success(`${job.title} 完成`)))
   }
 
+  if (missing) return <ProjectMissing kind="batch" name={batch} />
   if (!data) return <BatchSkeleton />
 
   const { batch: b, stats, scripts, clips } = data
@@ -99,17 +114,19 @@ export function BatchPage({ batch, tab }: { batch: string; tab: "scripts" | "cli
       {/* 标题 */}
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
-          <div className="text-xs tracking-[0.25em] text-gold-ink">拍摄批次</div>
+          <div className="text-xs tracking-[0.25em] text-gold-ink">视频素材剪辑</div>
           <h1 className="mt-1 text-3xl font-bold tracking-wide">{b.batch}</h1>
-          <div className="mt-1 text-sm text-muted-foreground">{b.clips} 条素材 · {minutes(totalSec)} 分钟 · 4K 竖拍</div>
+          <div className="mt-1 text-sm text-muted-foreground">{b.clips ? `${b.clips} 条素材 · ${minutes(totalSec)} 分钟` : "还没有素材"}{queue.busy && " · 上传中…"}</div>
         </div>
         <div className="flex flex-wrap gap-2">
+          <DeleteProject kind="batch" id={batch} name={b.batch} current />
+          <Button variant="outline" size="lg" onClick={addMaterial}><Plus />添加素材</Button>
           {b.transcribed < b.clips && (
             <Button variant="ghost" onClick={transcribe} disabled={running}><Mic />只做识别</Button>
           )}
           <AlertDialog>
             <AlertDialogTrigger asChild>
-              <Button variant="outline" size="lg" disabled={running}><Rocket />一键直接出片</Button>
+              <Button variant="outline" size="lg" disabled={running || !b.clips || queue.busy}><Rocket />一键成片</Button>
             </AlertDialogTrigger>
             <AlertDialogContent>
               <AlertDialogHeader>
@@ -126,7 +143,7 @@ export function BatchPage({ batch, tab }: { batch: string; tab: "scripts" | "cli
             </AlertDialogContent>
           </AlertDialog>
           {!scripts.length ? (
-            <Button size="lg" className="gold-gradient shine px-4 font-bold shadow-lg shadow-primary/25" onClick={generate} disabled={running}>
+            <Button size="lg" className="gold-gradient shine px-4 font-bold shadow-lg shadow-primary/25" onClick={generate} disabled={running || !b.clips || queue.busy}>
               {running ? <Loader2 className="animate-spin" /> : <Sparkles />}一键识别并出脚本
             </Button>
           ) : pending ? (
@@ -153,6 +170,12 @@ export function BatchPage({ batch, tab }: { batch: string; tab: "scripts" | "cli
           )}
         </div>
       </div>
+
+      {!b.clips && (
+        <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.35, ease }} className="mt-6">
+          <ClipSources batch={batch} queue={queue} big onChanged={refresh} />
+        </motion.div>
+      )}
 
       {/* 步骤条 */}
       <Stagger className="mt-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
@@ -210,7 +233,12 @@ export function BatchPage({ batch, tab }: { batch: string; tab: "scripts" | "cli
           exit={{ opacity: 0, y: -4 }}
           transition={{ duration: 0.22, ease }}
         >
-          {tab === "scripts" ? <ScriptGrid batch={batch} scripts={scripts} /> : <ClipLibrary batch={batch} clips={clips} />}
+          {tab === "scripts" ? <ScriptGrid batch={batch} scripts={scripts} /> : (
+            <>
+              {b.clips > 0 && <div className="mb-5"><ClipSources batch={batch} queue={queue} onChanged={refresh} /></div>}
+              <ClipLibrary batch={batch} clips={clips} />
+            </>
+          )}
         </motion.div>
       </AnimatePresence>
     </div>

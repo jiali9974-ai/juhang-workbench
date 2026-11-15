@@ -126,6 +126,9 @@ export const api = {
   info: () => request<Info>("/api/info"),
   gpu: () => request<Gpu>("/api/gpu"),
   batches: () => request<Batch[]>("/api/batches"),
+  createBatch: (name: string, folder?: string) =>
+    request<{ batch: string; job: Job | null }>("/api/batches", { method: "POST", body: JSON.stringify({ name, folder }) }),
+  importFolder: (b: string, path: string) => request<Job>(`/api/batches/${e(b)}/import_folder`, { method: "POST", body: JSON.stringify({ path }) }),
   stats: (b: string) => request<{ stats: Record<string, number> }>(`/api/batches/${e(b)}/transcripts`).then((r) => r.stats),
   clips: (b: string) => request<Clip[]>(`/api/batches/${e(b)}/clips`),
   transcript: (b: string, clip: string) => request<Transcript>(`/api/batches/${e(b)}/transcripts/${e(clip)}`),

@@ -10,7 +10,7 @@ import subprocess
 from pathlib import Path
 
 import uvicorn
-from fastapi import Body, FastAPI, HTTPException
+from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse
 
 from jh import asr, config, media, render, script as scriptmod, tts
@@ -91,7 +91,7 @@ def gpu_status():
 def batches():
     root = config.material_root()
     out = []
-    for d in sorted(p for p in root.iterdir() if p.is_dir()):
+    for d in sorted((p for p in root.iterdir() if p.is_dir()), key=lambda x: -x.stat().st_mtime):
         clips = media.list_clips(d)
         done = sum((_transcript_dir(d.name) / f"{c.stem}.json").exists() for c in clips)
         scripts = scriptmod.list_scripts(d.name)
@@ -182,6 +182,109 @@ def output_thumb(batch: str, sid: str):
         out.parent.mkdir(parents=True, exist_ok=True)
         media.run_ffmpeg(["-ss", "1.5", "-i", str(src), "-frames:v", "1", "-vf", "scale=270:480", "-q:v", "4", str(out)])
     return FileResponse(out, media_type="image/jpeg")
+
+
+# ---------------- 素材剪辑项目：新建、上传素材 ----------------
+
+_BAD_NAME = set('\\/:*?"<>|')
+
+
+def _safe_name(name: str) -> str:
+    name = "".join(c for c in (name or "").strip() if c not in _BAD_NAME and ord(c) >= 32).strip(" .")
+    return name[:60]
+
+
+@app.post("/api/batches")
+def create_batch(data: dict = Body(...)):
+    """新建一个素材剪辑项目（在素材目录下建文件夹）。"""
+    folder = str(data.get("folder") or "").strip().strip('"')
+    if folder and not Path(folder).is_dir():
+        raise HTTPException(400, f"找不到文件夹：{folder}")
+    name = _safe_name(data.get("name", "") or (Path(folder).name if folder else ""))
+    if not name or name in (".", ".."):
+        raise HTTPException(400, "项目名不能为空，也不能有 \\ / : * ? \" < > | 这些字符")
+    d = config.material_root() / name
+    if d.exists():
+        raise HTTPException(400, f"已经有叫「{name}」的项目了")
+    d.mkdir(parents=True)
+    job = jobs.submit("import", f"加载文件夹到 {name}", lambda pr: _import_folder(name, folder, pr)).to_dict() if folder else None
+    return {"batch": name, "job": job}
+
+
+@app.put("/api/batches/{batch}/upload")
+async def upload_clip(batch: str, request: Request, filename: str):
+    """上传一条视频素材：边收边写硬盘，几个 GB 的文件也不占内存。同名文件自动改名，不覆盖。"""
+    d = _batch_dir(batch)
+    name = _safe_name(Path(filename).name)
+    ext = Path(name).suffix.lower()
+    if ext not in media.VIDEO_EXTS:
+        raise HTTPException(400, f"只支持 {'、'.join(sorted(media.VIDEO_EXTS))} 视频文件")
+    stem, target, n = Path(name).stem, d / name, 1
+    while target.exists():
+        n += 1
+        target = d / f"{stem}_{n}{ext}"
+    part = target.with_suffix(target.suffix + ".part")
+    size = 0
+    try:
+        with open(part, "wb") as f:
+            async for chunk in request.stream():
+                f.write(chunk)
+                size += len(chunk)
+        if size == 0:
+            raise HTTPException(400, "文件是空的")
+        part.rename(target)
+    except BaseException:
+        part.unlink(missing_ok=True)
+        raise
+    return {"clip": target.name, "size": size}
+
+
+
+def _import_folder(batch: str, src: str, progress=None) -> dict:
+    """把本机一个文件夹（含子文件夹）里的视频加进项目：同一硬盘用硬链接（瞬间完成、不占额外空间），否则复制。"""
+    import os
+    import shutil
+
+    root = Path(src.strip().strip('"'))
+    if not root.is_dir():
+        raise RuntimeError(f"找不到文件夹：{src}")
+    dst = _batch_dir(batch)
+    files = sorted(f for f in root.rglob("*") if f.is_file() and f.suffix.lower() in media.VIDEO_EXTS)
+    if not files:
+        raise RuntimeError("这个文件夹里没有 .mov / .mp4 / .m4v 视频")
+    added, linked = [], 0
+    for i, f in enumerate(files):
+        if progress:
+            progress(i, len(files), f"加载 {f.name}（{i + 1}/{len(files)}）")
+        rel = f.relative_to(root)
+        name = _safe_name("_".join(rel.parts))          # 子文件夹里的文件：文件夹名_文件名，避免重名
+        target, n = dst / name, 1
+        while target.exists():
+            if target.stat().st_size == f.stat().st_size:
+                break                                    # 同名同大小，视为已加载过
+            n += 1
+            target = dst / f"{Path(name).stem}_{n}{Path(name).suffix}"
+        if target.exists():
+            continue
+        try:
+            os.link(f, target)                           # 同一硬盘：硬链接
+            linked += 1
+        except OSError:
+            shutil.copy2(f, target)                      # 跨硬盘：复制
+        added.append(target.name)
+    return {"added": len(added), "linked": linked, "copied": len(added) - linked, "total": len(files)}
+
+
+@app.post("/api/batches/{batch}/import_folder")
+def import_folder(batch: str, data: dict = Body(...)):
+    _batch_dir(batch)
+    path = str(data.get("path") or "").strip()
+    if not path:
+        raise HTTPException(400, "请填写文件夹路径")
+    if not Path(path.strip('"')).is_dir():
+        raise HTTPException(400, f"找不到文件夹：{path}")
+    return jobs.submit("import", f"加载文件夹到 {batch}", lambda pr: _import_folder(batch, path, pr)).to_dict()
+
 
 
 @app.get("/api/batches/{batch}/transcripts")
@@ -529,6 +632,59 @@ def tvc_file(pid: str, name: str):
     media_type = {".mp4": "video/mp4", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
                   ".webp": "image/webp"}.get(f.suffix.lower())
     return FileResponse(f, media_type=media_type)
+
+
+
+# ---------------- 删除项目（挪进回收站，可以恢复） ----------------
+
+def _recycle_dir(kind: str, name: str) -> Path:
+    import time
+
+    d = config.data_root() / "_recycle" / f"{kind}_{name}_{time.strftime('%Y%m%d_%H%M%S')}"
+    d.mkdir(parents=True)
+    return d
+
+
+def _busy_with(name: str) -> bool:
+    return any(j["status"] in ("queued", "running") and name in j["title"] for j in jobs.list(200))
+
+
+@app.delete("/api/batches/{batch}")
+def delete_batch(batch: str):
+    """删除素材剪辑项目：原始视频、识别结果、脚本、成片一起挪进 data/_recycle/，同一硬盘上瞬间完成，可以挪回来恢复。"""
+    import shutil
+
+    d = _batch_dir(batch)
+    if _busy_with(batch):
+        raise HTTPException(409, "这个项目还有任务在跑，等跑完再删")
+    rb = _recycle_dir("素材剪辑", batch)
+    shutil.move(str(d), str(rb / "素材"))
+    root = config.data_root()
+    for sub in ("transcripts", "scripts", "outputs", "renders", "preview", "thumbs", "voice_refs"):
+        src = root / sub / batch
+        if src.exists():
+            shutil.move(str(src), str(rb / sub))
+    info = root / "clipinfo" / f"{batch}.json"
+    if info.exists():
+        shutil.move(str(info), str(rb / "clipinfo.json"))
+    return {"ok": True, "recycled_to": str(rb)}
+
+
+@app.delete("/api/tvc/{pid}")
+def delete_tvc(pid: str):
+    """删除产品图生视频项目：整个项目文件夹挪进 data/_recycle/，可以恢复。"""
+    import shutil
+
+    from jh import tvc
+
+    d = tvc.pdir(pid)
+    if not d.is_dir():
+        raise HTTPException(404, "找不到项目")
+    if any(j["status"] in ("queued", "running") and j["kind"] == "tvc" for j in jobs.list(200)):
+        raise HTTPException(409, "产品图生视频还有任务在跑，等跑完再删")
+    rb = _recycle_dir("产品图生视频", pid)
+    shutil.move(str(d), str(rb / "项目"))
+    return {"ok": True, "recycled_to": str(rb)}
 
 
 

@@ -1,7 +1,20 @@
-import { useEffect, useState } from "react"
-import { AudioLines, Bot, Cpu, FolderOpen, HardDrive, Sparkles } from "lucide-react"
-import { motion } from "motion/react"
+import { useEffect, useState, type ReactNode } from "react"
+import { AudioLines, Bot, ChevronRight, Clapperboard, Cpu, FolderOpen, HardDrive, Loader2, Plus, Sparkles } from "lucide-react"
+import { AnimatePresence, motion } from "motion/react"
+import { toast } from "sonner"
 
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog"
+import { DeleteProject } from "@/components/delete-project"
+import { Input } from "@/components/ui/input"
 import {
   Sidebar,
   SidebarContent,
@@ -14,11 +27,13 @@ import {
   SidebarMenuButton,
   SidebarMenuItem,
   SidebarRail,
+  useSidebar,
 } from "@/components/ui/sidebar"
 import { useJobs } from "@/hooks/use-jobs"
 import { go, href, type Route } from "@/hooks/use-route"
 import { api, type Batch, type Gpu, type Info, type TtsEngine } from "@/lib/api"
 import { minutes } from "@/lib/format"
+import { tvcApi, tvcFile, type TvcSummary } from "@/lib/tvc"
 import { cn } from "@/lib/utils"
 
 function GpuCard({ gpu, busy }: { gpu: Gpu | null; busy: boolean }) {
@@ -43,21 +58,98 @@ function GpuCard({ gpu, busy }: { gpu: Gpu | null; busy: boolean }) {
   )
 }
 
-function BatchProgress({ b }: { b: Batch }) {
-  const t = b.clips ? b.transcribed / b.clips : 0
-  const r = b.scripts ? b.rendered / b.scripts : 0
-  const seg = (p: number) => (
-    <span className="h-[3px] flex-1 overflow-hidden rounded-full bg-foreground/10">
-      <span className="block h-full bg-primary" style={{ width: `${p * 100}%` }} />
-    </span>
-  )
+function MiniProgress({ parts }: { parts: number[] }) {
   return (
-    <span className="mt-1.5 flex w-full gap-1">
-      {seg(t)}
-      {seg(b.scripts ? 1 : 0)}
-      {seg(r)}
+    <span className="mt-1 flex w-full gap-0.5">
+      {parts.map((p, i) => (
+        <span key={i} className="h-[3px] flex-1 overflow-hidden rounded-full bg-foreground/10">
+          <span className="block h-full bg-primary transition-all duration-500" style={{ width: `${Math.max(0, Math.min(1, p)) * 100}%` }} />
+        </span>
+      ))}
     </span>
   )
+}
+
+const TVC_STAGE: Record<string, string> = { created: "待开始", analyzed: "已识别", planned: "方案已出", keyframes: "分镜待审核", done: "已出片" }
+
+/** 可展开的一条主线：标题行 + 下拉的项目列表 */
+function NavSection(props: {
+  id: string
+  icon: ReactNode
+  title: string
+  badge?: ReactNode
+  active: boolean
+  open: boolean
+  onToggle: () => void
+  onHome: () => void
+  count: number
+  children: ReactNode
+}) {
+  const { state } = useSidebar()
+  const collapsed = state === "collapsed"
+  return (
+    <SidebarMenuItem>
+      <SidebarMenuButton
+        size="lg"
+        tooltip={props.title}
+        isActive={props.active}
+        onClick={() => (collapsed ? props.onHome() : props.onToggle())}
+        className="h-10 data-[active=true]:bg-sidebar-accent/70"
+      >
+        {props.icon}
+        <span className="font-semibold">{props.title}</span>
+        {props.badge}
+        <span className="ml-auto rounded-full bg-muted px-1.5 text-[10px] text-muted-foreground tabular group-data-[collapsible=icon]:hidden">{props.count}</span>
+        <motion.span animate={{ rotate: props.open ? 90 : 0 }} transition={{ duration: 0.2 }} className="text-muted-foreground group-data-[collapsible=icon]:hidden">
+          <ChevronRight className="size-4" />
+        </motion.span>
+      </SidebarMenuButton>
+      <AnimatePresence initial={false}>
+        {props.open && !collapsed && (
+          <motion.div
+            key={props.id}
+            initial={{ height: 0, opacity: 0 }}
+            animate={{ height: "auto", opacity: 1 }}
+            exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.25, ease: [0.22, 1, 0.36, 1] }}
+            className="overflow-hidden"
+          >
+            <div className="mt-1 ml-3.5 grid gap-0.5 border-l border-sidebar-border py-0.5 pl-2">{props.children}</div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+    </SidebarMenuItem>
+  )
+}
+
+function SubItem({ active, onClick, children, layoutKey, action }: { active: boolean; onClick: () => void; children: ReactNode; layoutKey: string; action?: ReactNode }) {
+  return (
+    <div className="group/sub relative">
+      <button onClick={onClick} className={cn("relative isolate w-full rounded-md px-2 py-1.5 text-left transition-colors hover:bg-sidebar-accent/60", active && "text-sidebar-accent-foreground")}>
+        {active && (
+          <motion.span layoutId={layoutKey} className="absolute inset-0 -z-10 rounded-md bg-sidebar-accent ring-1 ring-primary/35" transition={{ type: "spring", stiffness: 380, damping: 32 }} />
+        )}
+        {children}
+      </button>
+      {action && <div className="absolute top-1 right-1">{action}</div>}
+    </div>
+  )
+}
+
+function NewButton({ label, onClick }: { label: string; onClick: () => void }) {
+  return (
+    <button onClick={onClick} className="flex w-full items-center gap-1.5 rounded-md px-2 py-1.5 text-left text-[13px] font-medium text-gold-ink transition-colors hover:bg-primary/10">
+      <Plus className="size-3.5" />{label}
+    </button>
+  )
+}
+
+function loadOpen(): Record<string, boolean> {
+  try {
+    return JSON.parse(localStorage.getItem("jh.nav.open") || "") || { tvc: true, clips: true }
+  } catch {
+    return { tvc: true, clips: true }
+  }
 }
 
 export function AppSidebar({ route }: { route: Route }) {
@@ -65,14 +157,21 @@ export function AppSidebar({ route }: { route: Route }) {
   const [gpu, setGpu] = useState<Gpu | null>(null)
   const [info, setInfo] = useState<Info | null>(null)
   const [batches, setBatches] = useState<Batch[]>([])
+  const [tvcs, setTvcs] = useState<TvcSummary[]>([])
   const [engine, setEngine] = useState<TtsEngine | null>(null)
+  const [open, setOpen] = useState<Record<string, boolean>>(loadOpen)
+  const [newBatch, setNewBatch] = useState<{ show: boolean; name: string; folder: string; busy: boolean }>({ show: false, name: "", folder: "", busy: false })
+  const { watch } = useJobs()
+
+  useEffect(() => {
+    try { localStorage.setItem("jh.nav.open", JSON.stringify(open)) } catch { /* 无痕模式等情况忽略 */ }
+  }, [open])
   useEffect(() => {
     const load = () => api.ttsEngines().then((r) => setEngine(r.engines.find((x) => x.id === r.default) ?? null)).catch(() => {})
     load()
     const t = setInterval(load, 8000)
     return () => clearInterval(t)
   }, [])
-
   useEffect(() => {
     api.info().then(setInfo).catch(() => {})
     const load = () => api.gpu().then(setGpu).catch(() => {})
@@ -82,9 +181,45 @@ export function AppSidebar({ route }: { route: Route }) {
   }, [])
   useEffect(() => {
     api.batches().then(setBatches).catch(() => {})
+    tvcApi.list().then(setTvcs).catch(() => {})
   }, [version, route])
+  useEffect(() => {
+    // 上传、加载文件夹完成后页面会发这个事件，侧边栏跟着刷新素材数量
+    const on = () => { api.batches().then(setBatches).catch(() => {}); tvcApi.list().then(setTvcs).catch(() => {}) }
+    window.addEventListener("jh:refresh", on)
+    return () => window.removeEventListener("jh:refresh", on)
+  }, [])
 
-  const current = route.page === "batch" || route.page === "script" ? route.batch : null
+  const curBatch = route.page === "batch" || route.page === "script" ? route.batch : null
+  const curTvc = route.page === "tvc-project" ? route.id : null
+  const toggle = (k: string) => setOpen((o) => ({ ...o, [k]: !o[k] }))
+
+  async function createBatch() {
+    const name = newBatch.name.trim()
+    const folder = newBatch.folder.trim()
+    if (!name && !folder) return toast.error("请填写项目名，或者填一个本机文件夹路径")
+    setNewBatch((s) => ({ ...s, busy: true }))
+    try {
+      const r = await api.createBatch(name, folder || undefined)
+      setNewBatch({ show: false, name: "", folder: "", busy: false })
+      setOpen((o) => ({ ...o, clips: true }))
+      if (r.job) {
+        toast.success(`已新建项目「${r.batch}」，正在加载文件夹里的视频`)
+        watch(r.job, (j) => {
+          const res = j.result as { added: number; linked: number; copied: number }
+          toast.success(`已加载 ${res.added} 个视频`, { description: res.linked ? `${res.linked} 个用硬链接（不占额外空间）` : undefined })
+          api.batches().then(setBatches).catch(() => {})
+        })
+      } else {
+        toast.success(`已新建项目「${r.batch}」`, { description: "把视频素材拖进页面，或选择文件夹加载" })
+      }
+      api.batches().then(setBatches).catch(() => {})
+      go({ page: "batch", batch: r.batch, tab: "clips" })
+    } catch (e) {
+      toast.error("新建失败", { description: String(e).replace(/^Error: /, "") })
+      setNewBatch((s) => ({ ...s, busy: false }))
+    }
+  }
 
   return (
     <Sidebar collapsible="icon" variant="sidebar">
@@ -98,7 +233,7 @@ export function AppSidebar({ route }: { route: Route }) {
                 </div>
                 <div className="grid leading-tight">
                   <span className="font-bold tracking-wide">巨航剪辑工作台</span>
-                  <span className="text-xs text-muted-foreground">口播素材 → 粤语带货短视频</span>
+                  <span className="text-xs text-muted-foreground">产品广告 · 口播带货短视频</span>
                 </div>
               </a>
             </SidebarMenuButton>
@@ -111,57 +246,69 @@ export function AppSidebar({ route }: { route: Route }) {
         <SidebarGroup>
           <SidebarGroupLabel>创作</SidebarGroupLabel>
           <SidebarGroupContent>
-            <SidebarMenu>
-              <SidebarMenuItem>
-                <SidebarMenuButton
-                  isActive={route.page === "tvc" || route.page === "tvc-project"}
-                  tooltip="产品图生视频"
-                  onClick={() => go({ page: "tvc" })}
-                  className="data-[active=true]:ring-1 data-[active=true]:ring-primary/35"
-                >
-                  <Sparkles className="text-gold-ink" />
-                  <span className="font-medium">产品图生视频</span>
-                  <span className="ml-auto rounded-full bg-primary/15 px-1.5 text-[10px] text-gold-ink group-data-[collapsible=icon]:hidden">云端</span>
-                </SidebarMenuButton>
-              </SidebarMenuItem>
-            </SidebarMenu>
-          </SidebarGroupContent>
-        </SidebarGroup>
-        <SidebarGroup>
-          <SidebarGroupLabel>口播剪辑 · 拍摄批次</SidebarGroupLabel>
-          <SidebarGroupContent>
-            <SidebarMenu className="gap-1">
-              {batches.map((b) => (
-                <SidebarMenuItem key={b.batch}>
-                  <SidebarMenuButton
-                    isActive={current === b.batch}
-                    tooltip={`${b.batch} · ${b.clips} 条素材`}
-                    onClick={() => go({ page: "batch", batch: b.batch, tab: "scripts" })}
-                    className="relative isolate h-auto flex-col items-start gap-0 py-2.5 transition-colors data-active:bg-transparent group-data-[collapsible=icon]:items-center"
-                  >
-                    {current === b.batch && (
-                      <motion.span
-                        layoutId="batch-active"
-                        className="absolute inset-0 -z-10 rounded-md bg-sidebar-accent ring-1 ring-primary/35"
-                        transition={{ type: "spring", stiffness: 380, damping: 32 }}
-                      />
-                    )}
-                    <span className="flex w-full items-baseline gap-2">
-                      <FolderOpen className="size-4 shrink-0 self-center text-muted-foreground group-data-[active=true]/menu-button:text-primary" />
-                      <span className="text-[15px] font-bold group-data-[collapsible=icon]:hidden">{b.batch}</span>
-                      <span className="ml-auto text-xs text-muted-foreground group-data-[collapsible=icon]:hidden">
-                        {b.clips} 条{b.total_seconds ? ` · ${minutes(b.total_seconds)} 分` : ""}
+            <SidebarMenu className="gap-1.5">
+              {/* 主线一：产品图生视频 */}
+              <NavSection
+                id="tvc"
+                icon={<Sparkles className="text-gold-ink" />}
+                title="产品图生视频"
+                badge={<span className="rounded-full bg-primary/15 px-1.5 text-[10px] text-gold-ink group-data-[collapsible=icon]:hidden">云端</span>}
+                active={route.page === "tvc" || route.page === "tvc-project"}
+                open={!!open.tvc}
+                onToggle={() => toggle("tvc")}
+                onHome={() => go({ page: "tvc" })}
+                count={tvcs.length}
+              >
+                <NewButton label="新建项目" onClick={() => go({ page: "tvc" })} />
+                {tvcs.length === 0 && <div className="px-2 py-1.5 text-xs text-muted-foreground">还没有项目</div>}
+                {tvcs.map((t) => (
+                  <SubItem key={t.id} layoutKey="nav-active" active={curTvc === t.id} onClick={() => go({ page: "tvc-project", id: t.id })}
+                    action={<DeleteProject kind="tvc" id={t.id} name={t.title} icon current={curTvc === t.id} />}>
+                    <span className="flex items-center gap-2">
+                      <span className="size-7 shrink-0 overflow-hidden rounded bg-muted bg-cover bg-center" style={{ backgroundImage: t.cover ? `url('${tvcFile(t.id, t.cover)}')` : undefined }} />
+                      <span className="min-w-0 flex-1 pr-5">
+                        <span className="block truncate text-[13px] font-medium">{t.title}</span>
+                        <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
+                          {active.some((j) => j.kind === "tvc" && j.result === null) && curTvc === t.id && <Loader2 className="size-3 animate-spin" />}
+                          {TVC_STAGE[t.stage] ?? t.stage}
+                        </span>
                       </span>
                     </span>
-                    <span className="pl-6 text-xs text-muted-foreground group-data-[collapsible=icon]:hidden">
-                      {b.scripts ? `${b.scripts} 条脚本 · ${b.rendered} 条已出片` : b.transcribed ? `已识别 ${b.transcribed}/${b.clips}` : "未处理"}
+                  </SubItem>
+                ))}
+              </NavSection>
+
+              {/* 主线二：视频素材剪辑 */}
+              <NavSection
+                id="clips"
+                icon={<Clapperboard className="text-gold-ink" />}
+                title="视频素材剪辑"
+                active={route.page === "batch" || route.page === "script" || route.page === "home"}
+                open={!!open.clips}
+                onToggle={() => toggle("clips")}
+                onHome={() => go({ page: "home" })}
+                count={batches.length}
+              >
+                <NewButton label="新建项目 / 加载文件夹" onClick={() => setNewBatch({ show: true, name: "", folder: "", busy: false })} />
+                {batches.map((b) => (
+                  <SubItem key={b.batch} layoutKey="nav-active" active={curBatch === b.batch} onClick={() => go({ page: "batch", batch: b.batch, tab: b.clips ? "scripts" : "clips" })}
+                    action={<DeleteProject kind="batch" id={b.batch} name={b.batch} icon current={curBatch === b.batch} />}>
+                    <span className="flex items-center gap-2">
+                      <FolderOpen className="size-4 shrink-0 text-muted-foreground" />
+                      <span className="min-w-0 flex-1 truncate text-[13px] font-semibold">{b.batch}</span>
+                      <span className="text-[11px] text-muted-foreground tabular transition-opacity group-hover/sub:opacity-0">{b.clips} 条{b.total_seconds ? ` · ${minutes(b.total_seconds)}分` : ""}</span>
                     </span>
-                    <span className="w-full pl-6 group-data-[collapsible=icon]:hidden">
-                      <BatchProgress b={b} />
+                    <span className="block pl-6 text-[11px] text-muted-foreground">
+                      {!b.clips ? "还没有素材，点进去上传" : b.scripts ? `${b.scripts} 条脚本 · ${b.rendered} 条已出片` : b.transcribed ? `已识别 ${b.transcribed}/${b.clips}` : "未处理"}
                     </span>
-                  </SidebarMenuButton>
-                </SidebarMenuItem>
-              ))}
+                    {b.clips > 0 && (
+                      <span className="block pl-6">
+                        <MiniProgress parts={[b.clips ? b.transcribed / b.clips : 0, b.scripts ? 1 : 0, b.scripts ? b.rendered / b.scripts : 0]} />
+                      </span>
+                    )}
+                  </SubItem>
+                ))}
+              </NavSection>
             </SidebarMenu>
           </SidebarGroupContent>
         </SidebarGroup>
@@ -170,12 +317,46 @@ export function AppSidebar({ route }: { route: Route }) {
       <SidebarFooter className="group-data-[collapsible=icon]:hidden">
         <div className="grid gap-1.5 border-t border-sidebar-border px-2 pt-3 text-xs text-muted-foreground">
           <div className="flex items-center gap-2"><AudioLines className="size-3.5" />配音 <b className="ml-auto flex items-center gap-1.5 font-medium text-foreground/80">{engine && <span className={cn("size-1.5 rounded-full", engine.running ? "bg-ok" : engine.available ? "bg-primary" : "bg-muted-foreground/40")} title={engine.running ? "运行中" : engine.note} />}{engine?.name ?? info?.tts ?? "-"}</b></div>
-          <div className="flex items-center gap-2"><Bot className="size-3.5" />出脚本 <b className="ml-auto font-medium text-foreground/80">{info?.llm ?? "-"}</b>{info && !info.llm_ready && <span className="text-warn">未填 Key</span>}</div>
+          <div className="flex items-center gap-2"><Bot className="size-3.5" />智能体 <b className="ml-auto font-medium text-foreground/80">{info?.llm ?? "-"}</b>{info && !info.llm_ready && <span className="text-warn">未填 Key</span>}</div>
           <div className="flex items-center gap-2"><HardDrive className="size-3.5" />素材和成片都在本机</div>
-          <div className="flex items-center gap-2"><Cpu className="size-3.5" />审核确认前不会出片</div>
+          <div className="flex items-center gap-2"><Cpu className="size-3.5" />产品图生视频在 AutoDL 云端</div>
         </div>
       </SidebarFooter>
       <SidebarRail />
+
+      {/* 新建素材剪辑项目 */}
+      <AlertDialog open={newBatch.show} onOpenChange={(v) => !newBatch.busy && setNewBatch((s) => ({ ...s, show: v }))}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>新建视频素材剪辑项目</AlertDialogTitle>
+            <AlertDialogDescription>填一个本机文件夹就能一键加载里面的视频；也可以建好后在项目页拖入视频或选择文件夹上传。然后点「一键成片」。</AlertDialogDescription>
+          </AlertDialogHeader>
+          <label className="grid gap-1.5 text-sm">项目名
+            <Input
+              autoFocus
+              value={newBatch.name}
+              onChange={(e) => setNewBatch((s) => ({ ...s, name: e.target.value }))}
+              onKeyDown={(e) => e.key === "Enter" && createBatch()}
+              placeholder="例如：11.16 门店口播（填了文件夹可以不填，默认用文件夹名）"
+            />
+          </label>
+          <label className="grid gap-1.5 text-sm">一键加载本机文件夹 <span className="text-xs text-muted-foreground">选填：这台电脑上放素材的文件夹，里面（含子文件夹）的视频会全部加进项目</span>
+            <Input
+              value={newBatch.folder}
+              onChange={(e) => setNewBatch((s) => ({ ...s, folder: e.target.value }))}
+              onKeyDown={(e) => e.key === "Enter" && createBatch()}
+              placeholder="例如：D:\巨航\素材\素材\9.29"
+              className="font-mono text-xs"
+            />
+          </label>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={newBatch.busy}>取消</AlertDialogCancel>
+            <AlertDialogAction disabled={newBatch.busy} onClick={(e) => { e.preventDefault(); createBatch() }}>
+              {newBatch.busy && <Loader2 className="animate-spin" />}新建
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </Sidebar>
   )
 }

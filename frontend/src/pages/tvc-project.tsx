@@ -4,6 +4,7 @@ import { AnimatePresence, motion } from "motion/react"
 import { toast } from "sonner"
 
 import { Phone } from "@/components/bits"
+import { DeleteProject, ProjectMissing } from "@/components/delete-project"
 import { ease, Stagger, StaggerItem } from "@/components/motion"
 import { Badge } from "@/components/ui/badge"
 import { Button } from "@/components/ui/button"
@@ -30,6 +31,7 @@ export function TvcProjectPage({ id }: { id: string }) {
   const [plan, setPlan] = useState<TvcPlan | null>(null)
   const [dirty, setDirty] = useState(false)
   const [cloud, setCloud] = useState<CloudStatus | null>(null)
+  const [missing, setMissing] = useState(false)
 
   const load = useCallback(async () => {
     const proj = await tvcApi.get(id)
@@ -38,8 +40,16 @@ export function TvcProjectPage({ id }: { id: string }) {
   }, [id, dirty])
 
   useEffect(() => {
-    load().catch((e) => toast.error("加载失败", { description: String(e) }))
-  }, [load, version])
+    setMissing(false)
+  }, [id])
+  useEffect(() => {
+    load().catch(async (e) => {
+      // 项目不存在（或刚被删掉）就显示提示，不再一直转圈
+      const list = await tvcApi.list().catch(() => null)
+      if (list && !list.some((x) => x.id === id)) return setMissing(true)
+      toast.error("加载失败", { description: String(e) })
+    })
+  }, [load, version, id])
   // 有任务在跑时每 4 秒刷新一次，生成好一张就显示一张
   const running = active.some((j) => j.kind === "tvc")
   useEffect(() => {
@@ -51,6 +61,7 @@ export function TvcProjectPage({ id }: { id: string }) {
     tvcApi.cloud().then(setCloud).catch(() => setCloud({ connected: false }))
   }, [running])
 
+  if (missing) return <ProjectMissing kind="tvc" name={id} />
   if (!p) {
     return <div className="mx-auto max-w-[1300px] space-y-3 px-8 pt-8"><Skeleton className="h-9 w-72" /><Skeleton className="h-24" /><Skeleton className="h-80" /></div>
   }
@@ -95,6 +106,7 @@ export function TvcProjectPage({ id }: { id: string }) {
           {plan?.concept && <p className="mt-1 max-w-3xl text-sm text-muted-foreground">{plan.concept}</p>}
         </div>
         <div className="flex flex-wrap items-center gap-2">
+          <DeleteProject kind="tvc" id={id} name={plan?.title || p.brief.product} size="default" current />
           <CloudBadge s={cloud} />
           {!kfDone ? (
             <Button className="gold-gradient shine font-bold" disabled={running} onClick={() => act(() => tvcApi.run(id, "keyframes"), "开始出分镜", "分镜出好了，请审核")}>
