@@ -15,10 +15,15 @@ asr:
   vad_dir: "D:/jhwb/models/fsmn-vad"
 
 llm:
-  # OpenAI 兼容接口：DeepSeek / 通义 / 其他都可以
-  base_url: "https://api.deepseek.com"
-  model: "deepseek-chat"
+  # 智能体（写剪辑脚本、产品广告方案）用的大模型：OpenAI 兼容接口，走中转站
+  base_url: "https://api.jialisite.top/v1"
+  model: "gpt-6.1-sol"
+  fallback_models: ["gpt-6", "gpt-5.6"]   # 主模型连续失败时依次换这些
   api_key_env: "JH_LLM_API_KEY"           # API Key 写在 secrets.yaml，不写进这个文件
+  timeout: 180                            # 单次请求超时（秒）
+  json_response_format: false             # 这个中转站不支持 response_format 参数（带了会 502），靠提示词要求只输出 JSON
+  # 换回 DeepSeek：base_url 改 https://api.deepseek.com，model 改 deepseek-chat，
+  # api_key_env 改 JH_DEEPSEEK_API_KEY（secrets.yaml 里还留着旧 Key）
 
 script:
   min_seconds: 25                         # 每条成片的时长范围（按选中句子的原声时长算）

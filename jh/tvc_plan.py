@@ -4,7 +4,7 @@ from __future__ import annotations
 import json
 from pathlib import Path
 
-from . import config, script as scriptmod
+from . import config, llm, script as scriptmod
 
 SPEC = Path(__file__).resolve().parent.parent / "skills" / "product_tvc.md"
 
@@ -31,7 +31,6 @@ def generate(brief: dict, caption: str) -> dict:
     """brief：产品名、品牌、卖点、风格要求等（用户填写）；caption：Qwen3-VL 看图的识别结果。"""
     c = config.load()["tvc"]
     segments, seconds = int(c["segments"]), float(c["seconds_per_segment"])
-    client, model = scriptmod._client()
     user = f"""## 用户填写（以此为准，和识别结果冲突时听用户的）
 产品名称：{brief.get('product') or '（未填）'}
 品牌名：{brief.get('brand') or '（未填，不要编造品牌名）'}
@@ -48,10 +47,9 @@ def generate(brief: dict, caption: str) -> dict:
         msgs = [{"role": "system", "content": SPEC.read_text(encoding="utf-8")}, {"role": "user", "content": user}]
         if last_err:
             msgs.append({"role": "user", "content": f"上一次的输出有问题：{last_err}。请修正后重新输出完整 JSON。"})
-        resp = client.chat.completions.create(model=model, temperature=0.6, max_tokens=8000,
-                                              response_format={"type": "json_object"}, messages=msgs)
+        text = llm.chat(msgs, json_mode=True, temperature=0.6, max_tokens=8000)
         try:
-            plan = scriptmod._extract_json(resp.choices[0].message.content)
+            plan = scriptmod._extract_json(text)
         except json.JSONDecodeError as e:
             last_err = f"JSON 格式错误：{e}"
             continue

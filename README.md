@@ -6,7 +6,7 @@
 
 ## 使用
 
-1. 第一次用：复制 `secrets.example.yaml` 为 `secrets.yaml`，填大模型 API Key（默认 DeepSeek）。
+1. 第一次用：复制 `secrets.example.yaml` 为 `secrets.yaml`，填大模型 API Key（默认走 GPT 中转站，地址和模型在 `config.yaml` 的 `llm`）。
 2. 双击 `start.bat`，浏览器打开 http://127.0.0.1:8765
 3. 左边选拍摄批次（素材目录下按日期分的文件夹）→「一键识别并出脚本」。
 4. 脚本出来后逐条「审核」：改字幕、删句子、调顺序、试听配音、选配音模式 →「确认并出片」。
@@ -17,7 +17,7 @@
 | 步骤 | 模块 | 说明 |
 |---|---|---|
 | 识别 | `jh/asr.py` | VAD 切段 + SenseVoice，标出每句是粤语还是普通话，带逐字时间戳 |
-| 出脚本 | `jh/script.py` | 大模型按「开头钩子 → 逐只表讲解 → 结尾引导」选句，写粤语口语字幕 |
+| 出脚本 | `jh/script.py` + `jh/llm.py` | 大模型（GPT）按「开头钩子 → 逐只表讲解 → 结尾引导」选句，写粤语口语字幕 |
 | 审核 | `web/index.html` | 人工确认，未确认的脚本不会出片 |
 | 配音 | `jh/tts.py` | `config.yaml` 里 `tts.engine` 切换 cosyvoice3 / azure |
 | 出片 | `jh/render.py` | 逐段裁切放大 → 拼接 → 烧字幕角标 → 响度统一 → 背景音乐闪避 |
@@ -49,7 +49,7 @@ Ming 用固定种子先生成一段粤语音色样本，之后每句都参考它
 | 步骤 | 在哪跑 | 说明 |
 |---|---|---|
 | 识别产品 | 云端 Qwen3-VL 8B | 看图写材质、颜色、结构、可见文字（型号可能认错，以你填的产品名为准） |
-| 写方案 | DeepSeek | 按 `skills/product_tvc.md`（由 typography-product-tvc 改写）输出 4 张关键帧提示词 + 3 段 H3 视频提示词 |
+| 写方案 | GPT（中转站） | 按 `skills/product_tvc.md`（由 typography-product-tvc 改写）输出 4 张关键帧提示词 + 3 段 H3 视频提示词 |
 | 出分镜 | 云端 Qwen-Image 2.1 | 每张都参考产品原图，9:16，约 10–17 秒一张 |
 | 出视频段 | 云端 MiniMax H3（fl2va_pruned_int8 + 8 步加速） | 第 k 段 = 关键帧 k → k+1，5 秒，自带音效，约 2–3 分钟一段 |
 | 合成 | 本机 ffmpeg | 去掉段间重复帧，拼接为 1080×1920 / 24fps；配置了 `tvc.bgm_file` 就混背景音乐 |
@@ -59,6 +59,13 @@ Ming 用固定种子先生成一段粤语音色样本，之后每句都参考它
 - 连接：本机用专用 SSH 密钥（`~/.ssh/jh_autodl`，ssh 配置别名 `jh-autodl`）自动建隧道到云端 ComfyUI，不需要密码。
   AutoDL 实例重开后 SSH 端口会变，改 `~/.ssh/config` 里 `Host jh-autodl` 的 `Port`。
 - 项目文件在 `data/tvc/<项目号>/`：产品图、方案 `project.json`、关键帧、视频段、成片。
+
+## 智能体（大模型）
+
+写剪辑脚本和产品广告方案都走 `jh/llm.py`：OpenAI 兼容接口，默认 GPT 中转站（`config.yaml` → `llm`）。
+- 主模型 `gpt-6.1-sol`，失败时依次换 `fallback_models`（gpt-6、gpt-5.6）；502/429/超时自动重试。
+- 这个中转站不支持 `response_format` 参数（带了会 502），所以 `json_response_format: false`，靠提示词要求只输出 JSON。
+- 换回 DeepSeek：`base_url` 改 `https://api.deepseek.com`，`model` 改 `deepseek-chat`，`api_key_env` 改 `JH_DEEPSEEK_API_KEY`。
 
 ## 配置
 

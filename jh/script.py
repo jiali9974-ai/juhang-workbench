@@ -69,13 +69,10 @@ def build_transcript_text(transcripts: list[dict]) -> tuple[str, dict]:
 
 
 def _client():
-    from openai import OpenAI
+    """兼容旧代码：返回 (client, 主模型名)。新代码请用 jh.llm.chat()。"""
+    from . import llm
 
-    cfg = config.load()["llm"]
-    key = config.secret(cfg["api_key_env"])
-    if not key:
-        raise RuntimeError(f"没有设置大模型 API Key：在 secrets.yaml 里填 {cfg['api_key_env']}")
-    return OpenAI(base_url=cfg["base_url"], api_key=key), cfg["model"]
+    return llm._client(), llm.models()[0]
 
 
 def _extract_json(text: str) -> dict:
@@ -111,22 +108,18 @@ def system_prompt() -> str:
             .replace("{keep}", "、".join(sc.get("keep_as_is", [])) or "（无）"))
 
 
-def _ask(client, model: str, batch: str, body: str, done_titles: list[str]) -> dict:
+def _ask(batch: str, body: str, done_titles: list[str]) -> dict:
+    from . import llm
+
     done = ("\n\n前面几组素材已经出过这些成片，同一组表不要再出：\n" + "\n".join(f"- {t}" for t in done_titles)) if done_titles else ""
     last_err = None
     for _ in range(3):
-        resp = client.chat.completions.create(
-            model=model,
-            temperature=0.3,
-            max_tokens=8000,
-            response_format={"type": "json_object"},
-            messages=[
-                {"role": "system", "content": system_prompt()},
-                {"role": "user", "content": f"以下是拍摄批次 {batch} 的一组素材识别结果：\n{body}{done}"},
-            ],
-        )
+        text = llm.chat([
+            {"role": "system", "content": system_prompt()},
+            {"role": "user", "content": f"以下是拍摄批次 {batch} 的一组素材识别结果：\n{body}{done}"},
+        ], json_mode=True, temperature=0.3, max_tokens=8000)
         try:
-            return _extract_json(resp.choices[0].message.content)
+            return _extract_json(text)
         except json.JSONDecodeError as e:  # 偶尔输出不完整，重试
             last_err = e
     raise RuntimeError(f"大模型返回的脚本格式不对：{last_err}")
@@ -134,7 +127,6 @@ def _ask(client, model: str, batch: str, body: str, done_titles: list[str]) -> d
 
 def generate(batch: str, transcripts: list[dict], progress=None) -> list[dict]:
     """调用大模型生成这一批素材的剪辑脚本（草稿）。素材多时分组请求。"""
-    client, model = _client()
     _, index = build_transcript_text(transcripts)          # 全批统一编号
     numbered = {t["clip"]: ci for ci, t in enumerate(transcripts, 1)}
     videos: list[dict] = []
@@ -148,7 +140,7 @@ def generate(batch: str, transcripts: list[dict], progress=None) -> list[dict]:
             lines.append(f"\n### 素材 C{ci}：{t['clip']}（{t['duration']:.0f} 秒）")
             for si, s in enumerate(t["sentences"], 1):
                 lines.append(f"C{ci}-S{si} [{s['start']:.1f}-{s['end']:.1f}] ({s['lang']}) {s['text']}")
-        videos += _ask(client, model, batch, "\n".join(lines), [v.get("title", "") for v in videos]).get("videos", [])
+        videos += _ask(batch, "\n".join(lines), [v.get("title", "") for v in videos]).get("videos", [])
     scripts = from_llm_output(batch, {"videos": videos}, index)
     # 兜底：时长明显不够的不要（模型偶尔不守规矩）
     min_s = config.load().get("script", {}).get("min_seconds", 25)
