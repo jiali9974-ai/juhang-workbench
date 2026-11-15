@@ -1,0 +1,163 @@
+@import "tailwindcss";
+@import "tw-animate-css";
+@import "shadcn/tailwind.css";
+@import "@fontsource-variable/geist";
+
+@custom-variant dark (&:is(.dark *));
+
+@theme inline {
+    --font-heading: var(--font-sans);
+    --font-sans: 'Geist Variable', 'Microsoft YaHei UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
+    --color-yue: var(--yue);
+    --color-zh: var(--zh);
+    --color-hook: var(--hook);
+    --color-product: var(--product);
+    --color-cta: var(--cta);
+    --color-ok: var(--ok);
+    --color-warn: var(--warn);
+    --color-gold-ink: var(--gold-ink);
+    --color-sidebar-ring: var(--sidebar-ring);
+    --color-sidebar-border: var(--sidebar-border);
+    --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+    --color-sidebar-accent: var(--sidebar-accent);
+    --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+    --color-sidebar-primary: var(--sidebar-primary);
+    --color-sidebar-foreground: var(--sidebar-foreground);
+    --color-sidebar: var(--sidebar);
+    --color-chart-5: var(--chart-5);
+    --color-chart-4: var(--chart-4);
+    --color-chart-3: var(--chart-3);
+    --color-chart-2: var(--chart-2);
+    --color-chart-1: var(--chart-1);
+    --color-ring: var(--ring);
+    --color-input: var(--input);
+    --color-border: var(--border);
+    --color-destructive: var(--destructive);
+    --color-accent-foreground: var(--accent-foreground);
+    --color-accent: var(--accent);
+    --color-muted-foreground: var(--muted-foreground);
+    --color-muted: var(--muted);
+    --color-secondary-foreground: var(--secondary-foreground);
+    --color-secondary: var(--secondary);
+    --color-primary-foreground: var(--primary-foreground);
+    --color-primary: var(--primary);
+    --color-popover-foreground: var(--popover-foreground);
+    --color-popover: var(--popover);
+    --color-card-foreground: var(--card-foreground);
+    --color-card: var(--card);
+    --color-foreground: var(--foreground);
+    --color-background: var(--background);
+    --radius-sm: calc(var(--radius) * 0.6);
+    --radius-md: calc(var(--radius) * 0.8);
+    --radius-lg: var(--radius);
+    --radius-xl: calc(var(--radius) * 1.4);
+    --radius-2xl: calc(var(--radius) * 1.8);
+    --radius-3xl: calc(var(--radius) * 2.2);
+    --radius-4xl: calc(var(--radius) * 2.6);
+}
+
+:root {
+    /* 浅色主题：象牙白底、白色卡片、金色点缀、深墨色文字 */
+    --background: oklch(0.975 0.006 85);
+    --foreground: oklch(0.25 0.02 260);
+    --card: oklch(1 0 0);
+    --card-foreground: oklch(0.25 0.02 260);
+    --popover: oklch(1 0 0);
+    --popover-foreground: oklch(0.25 0.02 260);
+    --primary: oklch(0.7 0.13 78);
+    --primary-foreground: oklch(0.22 0.04 70);
+    --secondary: oklch(0.955 0.008 85);
+    --secondary-foreground: oklch(0.3 0.02 260);
+    --muted: oklch(0.955 0.007 85);
+    --muted-foreground: oklch(0.53 0.015 260);
+    --accent: oklch(0.96 0.02 85);
+    --accent-foreground: oklch(0.3 0.03 70);
+    --destructive: oklch(0.58 0.2 27);
+    --border: oklch(0.905 0.01 85);
+    --input: oklch(0.885 0.01 85);
+    --ring: oklch(0.7 0.13 78 / 55%);
+    --chart-1: oklch(0.58 0.14 250);
+    --chart-2: oklch(0.65 0.16 45);
+    --chart-3: oklch(0.7 0.13 78);
+    --chart-4: oklch(0.62 0.13 160);
+    --chart-5: oklch(0.7 0.01 260);
+    --radius: 0.75rem;
+    --sidebar: oklch(1 0 0);
+    --sidebar-foreground: oklch(0.28 0.02 260);
+    --sidebar-primary: oklch(0.7 0.13 78);
+    --sidebar-primary-foreground: oklch(0.22 0.04 70);
+    --sidebar-accent: oklch(0.7 0.13 78 / 11%);
+    --sidebar-accent-foreground: oklch(0.4 0.08 70);
+    --sidebar-border: oklch(0.92 0.008 85);
+    --sidebar-ring: oklch(0.7 0.13 78 / 55%);
+
+    /* 业务色：粤语 / 普通话 / 镜头作用 / 状态 */
+    --yue: oklch(0.58 0.14 250);
+    --zh: oklch(0.66 0.16 45);
+    --hook: oklch(0.74 0.13 80);
+    --product: oklch(0.62 0.12 250);
+    --cta: oklch(0.64 0.13 160);
+    --ok: oklch(0.6 0.13 160);
+    --warn: oklch(0.7 0.15 65);
+    --gold-ink: oklch(0.5 0.1 72);   /* 浅底上的金色文字，保证对比度 */
+}
+
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+    }
+  body {
+    @apply bg-background text-foreground;
+    }
+  button:not(:disabled), [role="button"]:not(:disabled) {
+    cursor: pointer;
+    }
+  html {
+    @apply font-sans;
+    }
+}
+@layer utilities {
+  .tabular { font-variant-numeric: tabular-nums; }
+  .gold-gradient { background: linear-gradient(140deg, oklch(0.88 0.1 90), oklch(0.76 0.13 80) 55%, oklch(0.66 0.12 74)); color: oklch(0.22 0.04 70); }
+  .soft-shadow { box-shadow: 0 1px 2px oklch(0.25 0.02 260 / 5%), 0 4px 16px oklch(0.25 0.02 260 / 5%); }
+  .lift-shadow { box-shadow: 0 2px 6px oklch(0.25 0.02 260 / 6%), 0 16px 40px oklch(0.25 0.02 260 / 10%); }
+  .scrollbar-thin { scrollbar-width: thin; scrollbar-color: oklch(0.25 0.02 260 / 18%) transparent; }
+}
+
+/* ---------- 交互动效 ---------- */
+@layer utilities {
+  /* 按下按钮时轻微缩小 */
+  [data-slot="button"] { transition: transform .12s ease, background-color .15s, border-color .15s, box-shadow .2s, color .15s; }
+  [data-slot="button"]:active:not(:disabled) { transform: scale(.97); }
+
+  /* 金色按钮：悬停时一道光掠过 */
+  .shine { position: relative; overflow: hidden; isolation: isolate; }
+  .shine::after {
+    content: ""; position: absolute; inset: -20% auto -20% -60%; width: 45%; z-index: -1;
+    background: linear-gradient(100deg, transparent, oklch(1 0 0 / 55%), transparent);
+    transform: skewX(-18deg); transition: left .7s cubic-bezier(.22,1,.36,1);
+  }
+  .shine:hover::after { left: 120%; }
+
+  /* 卡片悬停：上浮 + 阴影加深 */
+  .lift { transition: transform .35s cubic-bezier(.22,1,.36,1), box-shadow .35s, border-color .2s; }
+  .lift:hover { transform: translateY(-4px); box-shadow: 0 6px 14px oklch(0.25 0.02 260 / 7%), 0 22px 48px oklch(0.25 0.02 260 / 12%); }
+
+  /* 首页背景缓慢流动的光斑 */
+  .blob { position: absolute; border-radius: 9999px; filter: blur(60px); opacity: .55; animation: drift 18s ease-in-out infinite alternate; }
+  @keyframes drift {
+    0% { transform: translate(0, 0) scale(1); }
+    50% { transform: translate(40px, -30px) scale(1.12); }
+    100% { transform: translate(-30px, 20px) scale(.95); }
+  }
+
+  /* 有未保存修改时的提醒点 */
+  .ping-dot { position: relative; }
+  .ping-dot::before { content: ""; position: absolute; inset: 0; border-radius: 9999px; background: currentColor; animation: ping 1.4s cubic-bezier(0,0,.2,1) infinite; }
+  @keyframes ping { 75%, 100% { transform: scale(2.2); opacity: 0; } }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .blob, .ping-dot::before { animation: none; }
+  .lift:hover { transform: none; }
+}

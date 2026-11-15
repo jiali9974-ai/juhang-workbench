@@ -1,0 +1,85 @@
+{
+  "id": "black-dial-3x3",
+  "title": "一張相睇黑面錶｜九格分鏡",
+  "source_image": "产品图/产品1/01c3cb273504c00b51ce58a3ca0c4621.jpg",
+  "reference_video": "素材/9.28/9月28日（6）.mp4",
+  "shots": [
+    {
+      "id": "01-hook",
+      "image": "01-hook.png",
+      "seconds": 3,
+      "seed": 2026111601,
+      "subtitle": "黑面錶有乜睇頭？",
+      "prompt": "A single vertical shop-inspection close-up of the photographed black dial and red arrow hand in the supplied first frame. Start in the exact first-frame composition and ease the camera forward very gently. The exact same black dial, markers, brush pattern, gloved hand and angle remain stable. The red arrow and white hands keep their original shapes and relative positions."
+    },
+    {
+      "id": "02-full-watch",
+      "image": "02-full-watch.png",
+      "seconds": 3.4,
+      "seed": 2026111602,
+      "subtitle": "先睇成隻錶",
+      "prompt": "One uninterrupted vertical close-up of the complete visible silver watch held in the same black glove, with the original soft teal background. Ease back slightly from the first frame while keeping the same photographed viewing direction. Keep the dial, numerals, date lens, bezel, gloved hold and bracelet full and steady in frame."
+    },
+    {
+      "id": "03-dial",
+      "image": "03-dial.png",
+      "seconds": 2.8,
+      "seed": 2026111603,
+      "subtitle": "近睇黑色錶面",
+      "prompt": "One vertical close inspection of the exact full black dial and brushed bezel in the input image. The composition stays centered and the camera makes a tiny straight push. The face is sharp and the dark dial, original lettering, round white markers and white hands keep their positions and shape."
+    },
+    {
+      "id": "04-bezel",
+      "image": "04-bezel.png",
+      "seconds": 2.6,
+      "seed": 2026111604,
+      "subtitle": "睇清楚錶圈刻度",
+      "prompt": "Single locked macro shot of the upper brushed steel bezel arc on this exact watch, lit by soft shop light. The upper engraved figures 20, 22 and 24 stay fixed on the metal with the original triangular pips between them. Identical camera framing throughout; only an extremely mild natural shift in reflected light.",
+      "lock_view": true
+    },
+    {
+      "id": "05-date-window",
+      "image": "05-date-window.png",
+      "seconds": 2.8,
+      "seed": 2026111605,
+      "subtitle": "再睇個日曆窗",
+      "prompt": "Still macro view of the right side of this black dial and its exact rounded date magnifier, showing one unchanged numeral 7. Keep the date window, crown side, lens contour, bezel and dial in the exact original framing. The camera is steady and surrounding illumination is soft and stable.",
+      "lock_view": true
+    },
+    {
+      "id": "06-upper-bracelet",
+      "image": "06-upper-bracelet.png",
+      "seconds": 2.6,
+      "seed": 2026111606,
+      "subtitle": "拉絲紋都睇到",
+      "prompt": "Locked vertical macro of the visible upper silver three-link bracelet and adjoining case exactly as pictured, with soft black cloth behind the links. The bracelet remains in the original position. A slight neutral reflection travels across one real brushed steel surface while the link pattern and field of view stay fixed.",
+      "lock_view": true
+    },
+    {
+      "id": "07-lower-bracelet",
+      "image": "07-lower-bracelet.png",
+      "seconds": 3,
+      "seed": 2026111607,
+      "subtitle": "再睇鏈帶接位",
+      "prompt": "Still vertical close-up of the exact lower bracelet links where they meet the original watch case, held at the same angle by the black glove. Keep the existing geometry and hand grip fully fixed. A very slight glint passes across the existing link creases. Framing and focus remain constant.",
+      "lock_view": true
+    },
+    {
+      "id": "08-red-hand",
+      "image": "08-red-hand.png",
+      "seconds": 3,
+      "seed": 2026111608,
+      "subtitle": "紅色指針幾搶眼",
+      "prompt": "Vertical portrait macro looking straight into the pictured black watch dial from its exact existing slanted angle. Keep the red arrow pointer and white hands sharply fixed in their original positions. Use a tiny straight push toward the face, with the original brushed rim and black glove remaining stable."
+    },
+    {
+      "id": "09-close",
+      "image": "09-close.png",
+      "seconds": 3.8,
+      "seed": 2026111609,
+      "subtitle": "黑面啱唔啱你？",
+      "prompt": "Single final portrait close-up of the whole pictured watch held by the same black glove in a simple shop setting. Make a restrained, tiny camera settle, then hold a stable composition with room below for postproduction text. The original watch face, red arrow, bezel, date window and silver bracelet remain crisply recognizable.",
+      "lock_view": true
+    }
+  ]
+}

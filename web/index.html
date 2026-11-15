@@ -1,0 +1,627 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>巨航剪辑工作台</title>
+<style>
+:root {
+  --bg: #0e0f11; --panel: #16171a; --panel-2: #1c1d21; --panel-3: #232429;
+  --line: #2a2c31; --line-2: #34363c;
+  --text: #ecebe7; --text-2: #b9b8b2; --muted: #85868c;
+  --gold: #d6ad52; --gold-2: #f0cf7e; --gold-ink: #1b1508; --gold-soft: rgba(214,173,82,.12);
+  --yue: #5b9be0; --zh: #e8834f; --ok: #45b883; --warn: #e3a43c; --err: #e6584f;
+  --hook: #d6ad52; --product: #5b9be0; --cta: #45b883;
+  --radius: 12px; --shadow: 0 10px 30px rgba(0,0,0,.35);
+}
+* { box-sizing: border-box; }
+html, body { height: 100%; }
+body { margin: 0; background: var(--bg); color: var(--text); font: 14px/1.55 "Microsoft YaHei UI", "PingFang SC", "Microsoft YaHei", system-ui, sans-serif; -webkit-font-smoothing: antialiased; }
+button, input, select, textarea { font: inherit; color: inherit; }
+::selection { background: var(--gold); color: var(--gold-ink); }
+::-webkit-scrollbar { width: 10px; height: 10px; } ::-webkit-scrollbar-thumb { background: #2c2e33; border-radius: 6px; border: 2px solid var(--bg); }
+
+.app { display: grid; grid-template-columns: 268px 1fr; min-height: 100vh; }
+@media (max-width: 900px) { .app { grid-template-columns: 1fr; } .sidebar { position: static !important; height: auto !important; } }
+
+/* ---------- 侧边栏 ---------- */
+.sidebar { position: sticky; top: 0; height: 100vh; background: var(--panel); border-right: 1px solid var(--line); display: flex; flex-direction: column; padding: 18px 14px; gap: 14px; overflow-y: auto; }
+.brand { display: flex; gap: 11px; align-items: center; padding: 2px 6px 6px; }
+.logo { width: 38px; height: 38px; border-radius: 10px; background: linear-gradient(140deg, var(--gold-2), var(--gold) 55%, #9c7a2c); color: var(--gold-ink); display: grid; place-items: center; font-weight: 800; font-size: 19px; box-shadow: 0 4px 14px rgba(214,173,82,.25); }
+.brand-name { font-weight: 700; font-size: 15px; letter-spacing: .5px; }
+.brand-sub { color: var(--muted); font-size: 12px; }
+.gpu { background: var(--panel-2); border: 1px solid var(--line); border-radius: var(--radius); padding: 12px; }
+.gpu-top { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.dot { width: 8px; height: 8px; border-radius: 50%; background: var(--muted); flex: none; }
+.dot.ok { background: var(--ok); box-shadow: 0 0 0 4px rgba(69,184,131,.15); }
+.dot.busy { background: var(--warn); box-shadow: 0 0 0 4px rgba(227,164,60,.18); animation: pulse 1.4s infinite; }
+@keyframes pulse { 50% { opacity: .45; } }
+.gpu-name { color: var(--text-2); font-size: 12px; margin: 6px 0 8px; }
+.meter { height: 5px; background: var(--panel-3); border-radius: 3px; overflow: hidden; }
+.meter i { display: block; height: 100%; background: linear-gradient(90deg, var(--gold), var(--gold-2)); transition: width .4s; }
+.gpu-foot { display: flex; justify-content: space-between; color: var(--muted); font-size: 11.5px; margin-top: 6px; }
+.side-label { color: var(--muted); font-size: 12px; padding: 0 6px; letter-spacing: 1px; }
+.batch { display: block; width: 100%; text-align: left; background: transparent; border: 1px solid transparent; border-radius: 10px; padding: 10px 12px; cursor: pointer; transition: background .15s, border-color .15s; }
+.batch:hover { background: var(--panel-2); }
+.batch.active { background: var(--gold-soft); border-color: rgba(214,173,82,.45); }
+.batch-head { display: flex; justify-content: space-between; align-items: baseline; }
+.batch-date { font-weight: 700; font-size: 16px; }
+.batch.active .batch-date { color: var(--gold-2); }
+.batch-meta { color: var(--muted); font-size: 12px; }
+.mini-steps { display: flex; gap: 4px; margin-top: 8px; }
+.mini-steps span { flex: 1; height: 3px; border-radius: 2px; background: var(--panel-3); }
+.mini-steps span.on { background: var(--gold); }
+.mini-steps span.part { background: linear-gradient(90deg, var(--gold) var(--p), var(--panel-3) var(--p)); }
+.side-foot { margin-top: auto; color: var(--muted); font-size: 11.5px; border-top: 1px solid var(--line); padding: 12px 6px 0; display: grid; gap: 4px; }
+.side-foot b { color: var(--text-2); font-weight: 500; }
+
+/* ---------- 主区 ---------- */
+.main { padding: 26px 32px 120px; max-width: 1480px; width: 100%; }
+@media (max-width: 900px) { .main { padding: 18px 16px 120px; } }
+.page-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; flex-wrap: wrap; }
+.eyebrow { color: var(--gold); font-size: 12px; letter-spacing: 2px; }
+h1 { font-size: 26px; margin: 2px 0 2px; font-weight: 700; letter-spacing: .5px; }
+.sub { color: var(--muted); }
+.btn { display: inline-flex; align-items: center; gap: 7px; padding: 8px 14px; border-radius: 9px; border: 1px solid var(--line-2); background: var(--panel-2); color: var(--text); cursor: pointer; transition: background .15s, border-color .15s, transform .05s; white-space: nowrap; }
+.btn:hover { border-color: #4a4c53; background: var(--panel-3); }
+.btn:active { transform: translateY(1px); }
+.btn:disabled { opacity: .45; cursor: default; }
+.btn.primary { background: linear-gradient(180deg, var(--gold-2), var(--gold)); color: var(--gold-ink); border-color: var(--gold); font-weight: 700; box-shadow: 0 6px 18px rgba(214,173,82,.22); }
+.btn.primary:hover { filter: brightness(1.05); }
+.btn.ghost { background: transparent; }
+.btn.danger:hover { border-color: var(--err); color: var(--err); }
+.btn.sm { padding: 4px 10px; font-size: 12.5px; border-radius: 7px; }
+.btn.icon { padding: 5px 8px; }
+.row { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+
+/* 步骤条 */
+.stepper { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin: 22px 0 18px; }
+@media (max-width: 700px) { .stepper { grid-template-columns: repeat(2, 1fr); } }
+.step { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; position: relative; overflow: hidden; }
+.step-n { width: 24px; height: 24px; border-radius: 50%; border: 1px solid var(--line-2); display: grid; place-items: center; font-size: 12px; color: var(--muted); }
+.step.done .step-n { background: var(--gold); border-color: var(--gold); color: var(--gold-ink); font-weight: 700; }
+.step.doing .step-n { border-color: var(--gold); color: var(--gold); }
+.step-title { font-weight: 600; margin-top: 8px; }
+.step-desc { color: var(--muted); font-size: 12px; }
+.step-bar { position: absolute; left: 0; bottom: 0; height: 3px; background: var(--gold); transition: width .4s; }
+
+/* 统计卡片 */
+.stats { display: grid; grid-template-columns: 1.6fr 1fr 1fr 1fr; gap: 10px; margin-bottom: 22px; }
+@media (max-width: 1000px) { .stats { grid-template-columns: 1fr 1fr; } }
+.stat { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; }
+.stat-label { color: var(--muted); font-size: 12px; }
+.stat-value { font-size: 24px; font-weight: 700; margin-top: 2px; font-variant-numeric: tabular-nums; }
+.stat-value small { font-size: 13px; color: var(--muted); font-weight: 400; margin-left: 3px; }
+.langbar { display: flex; height: 8px; border-radius: 4px; overflow: hidden; background: var(--panel-3); margin: 10px 0 8px; }
+.langbar span { height: 100%; }
+.legend { display: flex; gap: 14px; font-size: 12px; color: var(--text-2); flex-wrap: wrap; }
+.legend i { display: inline-block; width: 8px; height: 8px; border-radius: 2px; margin-right: 5px; }
+
+/* 标签页 */
+.tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin-bottom: 16px; }
+.tab { background: none; border: 0; padding: 10px 14px; color: var(--muted); cursor: pointer; border-bottom: 2px solid transparent; margin-bottom: -1px; }
+.tab.on { color: var(--text); border-color: var(--gold); }
+.tab .count { background: var(--panel-3); border-radius: 10px; padding: 0 7px; font-size: 11.5px; margin-left: 5px; color: var(--text-2); }
+
+/* 脚本卡片 */
+.grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(230px, 1fr)); gap: 14px; }
+.card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); overflow: hidden; transition: border-color .15s, transform .15s; }
+.card:hover { border-color: #3d3f46; transform: translateY(-2px); }
+.card-cover { position: relative; aspect-ratio: 9 / 12; background: #0a0a0b center / cover no-repeat; cursor: pointer; }
+.card-cover::after { content: ""; position: absolute; inset: 0; background: linear-gradient(180deg, rgba(0,0,0,0) 45%, rgba(0,0,0,.85)); }
+.card-cover .badge { position: absolute; top: 10px; left: 10px; z-index: 1; }
+.card-cover .dur { position: absolute; right: 10px; bottom: 10px; z-index: 1; font-size: 12px; background: rgba(0,0,0,.6); padding: 1px 7px; border-radius: 6px; font-variant-numeric: tabular-nums; }
+.card-cover .title { position: absolute; left: 12px; right: 60px; bottom: 10px; z-index: 1; font-weight: 700; font-size: 15px; line-height: 1.35; }
+.card-body { padding: 10px 12px 12px; }
+.card-meta { color: var(--muted); font-size: 12px; display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.card-actions { display: flex; gap: 6px; margin-top: 10px; }
+.card-actions .btn { flex: 1; justify-content: center; }
+.badge { display: inline-flex; align-items: center; gap: 5px; font-size: 11.5px; padding: 2px 8px; border-radius: 20px; background: var(--panel-3); color: var(--text-2); border: 1px solid var(--line-2); }
+.badge.gold { background: var(--gold-soft); color: var(--gold-2); border-color: rgba(214,173,82,.4); }
+.badge.ok { background: rgba(69,184,131,.12); color: #7fd6ad; border-color: rgba(69,184,131,.4); }
+.badge.draft { background: rgba(255,255,255,.06); }
+.lang { font-size: 11px; padding: 0 6px; border-radius: 4px; font-weight: 700; line-height: 18px; display: inline-block; }
+.lang.yue { background: rgba(91,155,224,.18); color: #8dbcf0; } .lang.zh { background: rgba(232,131,79,.18); color: #f2a77f; } .lang.other { background: var(--panel-3); color: var(--muted); }
+
+/* 素材库 */
+.clip { display: grid; grid-template-columns: 64px 1fr; gap: 12px; padding: 10px; background: var(--panel); border: 1px solid var(--line); border-radius: 10px; cursor: pointer; }
+.clip:hover { border-color: #3d3f46; }
+.clip img { width: 64px; height: 114px; object-fit: cover; border-radius: 6px; background: #000; }
+.clip-name { font-weight: 600; font-size: 13px; }
+.clip-text { color: var(--muted); font-size: 12px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; margin-top: 4px; }
+.clips { display: grid; grid-template-columns: repeat(auto-fill, minmax(300px, 1fr)); gap: 10px; }
+
+/* 空状态 */
+.empty { border: 1px dashed var(--line-2); border-radius: var(--radius); padding: 40px 20px; text-align: center; color: var(--muted); }
+.empty h3 { color: var(--text); margin: 0 0 6px; font-size: 16px; }
+.welcome { max-width: 760px; margin: 8vh auto 0; text-align: center; }
+.welcome h1 { font-size: 30px; }
+.flow { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 30px; text-align: left; }
+@media (max-width: 700px) { .flow { grid-template-columns: 1fr 1fr; } }
+.flow div { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px; }
+.flow b { color: var(--gold); font-size: 20px; display: block; }
+
+/* ---------- 审核页 ---------- */
+.back { color: var(--muted); cursor: pointer; background: none; border: 0; padding: 0; margin-bottom: 10px; }
+.back:hover { color: var(--text); }
+.editor-head { display: flex; gap: 12px; align-items: center; flex-wrap: wrap; }
+.title-input { flex: 1; min-width: 240px; font-size: 22px; font-weight: 700; background: transparent; border: 1px solid transparent; border-radius: 8px; padding: 4px 8px; margin-left: -8px; }
+.title-input:hover { border-color: var(--line-2); } .title-input:focus { outline: none; border-color: var(--gold); background: var(--panel); }
+.seg { display: inline-flex; background: var(--panel); border: 1px solid var(--line); border-radius: 9px; padding: 3px; }
+.seg button { border: 0; background: none; padding: 5px 11px; border-radius: 6px; color: var(--muted); cursor: pointer; font-size: 13px; }
+.seg button.on { background: var(--panel-3); color: var(--text); box-shadow: inset 0 0 0 1px var(--line-2); }
+.voice-note { color: var(--muted); font-size: 12px; }
+.timeline { display: flex; height: 30px; border-radius: 8px; overflow: hidden; margin: 16px 0 6px; background: var(--panel); border: 1px solid var(--line); }
+.timeline div { border-right: 1px solid var(--bg); cursor: pointer; position: relative; min-width: 3px; transition: filter .15s; }
+.timeline div:hover, .timeline div.on { filter: brightness(1.35); }
+.timeline div.zh::after { content: ""; position: absolute; left: 0; right: 0; bottom: 0; height: 4px; background: var(--zh); }
+.tl-legend { display: flex; gap: 14px; color: var(--muted); font-size: 12px; margin-bottom: 14px; flex-wrap: wrap; }
+.tl-legend i { display: inline-block; width: 10px; height: 10px; border-radius: 3px; margin-right: 5px; vertical-align: -1px; }
+.editor { display: grid; grid-template-columns: 1fr 360px; gap: 18px; align-items: start; }
+@media (max-width: 1200px) { .editor { grid-template-columns: 1fr; } }
+.lines { display: grid; gap: 8px; }
+.line { display: grid; grid-template-columns: 30px minmax(180px, 0.9fr) 1.3fr auto; gap: 12px; align-items: start; background: var(--panel); border: 1px solid var(--line); border-left: 3px solid var(--role); border-radius: 10px; padding: 12px; }
+.line.on { border-color: rgba(214,173,82,.55); border-left-color: var(--role); background: var(--panel-2); }
+@media (max-width: 760px) { .line { grid-template-columns: 26px 1fr; } .line .sub-col, .line .ctl { grid-column: 1 / -1; } }
+.line-n { width: 26px; height: 26px; border-radius: 50%; background: var(--panel-3); display: grid; place-items: center; font-size: 12px; color: var(--text-2); }
+.src-text { color: var(--text-2); font-size: 13px; }
+.src-meta { color: var(--muted); font-size: 11.5px; margin-top: 4px; font-variant-numeric: tabular-nums; }
+.sub-col textarea { width: 100%; min-height: 46px; resize: vertical; background: var(--bg); border: 1px solid var(--line-2); border-radius: 8px; padding: 8px 10px; font-size: 16px; font-weight: 600; line-height: 1.45; }
+.sub-col textarea:focus { outline: none; border-color: var(--gold); }
+.sub-info { display: flex; justify-content: space-between; color: var(--muted); font-size: 11.5px; margin-top: 4px; }
+.sub-info .warn { color: var(--warn); }
+.ctl { display: grid; gap: 6px; justify-items: end; }
+.ctl select { background: var(--panel-2); border: 1px solid var(--line-2); border-radius: 7px; padding: 3px 6px; font-size: 12.5px; }
+.ctl .row { gap: 4px; flex-wrap: nowrap; }
+.preview-col { position: sticky; top: 18px; display: grid; gap: 12px; }
+.phone { background: #000; border-radius: 22px; padding: 8px; border: 1px solid var(--line-2); box-shadow: var(--shadow); }
+.phone-screen { aspect-ratio: 9 / 16; border-radius: 15px; overflow: hidden; background: #0a0a0b; display: grid; place-items: center; color: var(--muted); text-align: center; font-size: 13px; }
+.phone-screen video { width: 100%; height: 100%; object-fit: contain; background: #000; }
+.preview-cap { color: var(--text-2); font-size: 12.5px; }
+.savebar { position: sticky; bottom: 14px; margin-top: 16px; display: flex; gap: 10px; align-items: center; justify-content: flex-end; background: rgba(22,23,26,.92); backdrop-filter: blur(8px); border: 1px solid var(--line); border-radius: var(--radius); padding: 10px 12px; box-shadow: var(--shadow); }
+.savebar .grow { flex: 1; color: var(--muted); font-size: 12.5px; }
+.dirty { color: var(--warn) !important; }
+
+/* ---------- 任务浮窗 & 提示 ---------- */
+.dock { position: fixed; right: 18px; bottom: 18px; width: 340px; background: rgba(22,23,26,.96); backdrop-filter: blur(10px); border: 1px solid var(--line-2); border-radius: 14px; box-shadow: var(--shadow); z-index: 20; overflow: hidden; }
+.dock-head { display: flex; align-items: center; gap: 8px; padding: 10px 14px; cursor: pointer; font-size: 13px; }
+.dock-head .grow { flex: 1; }
+.dock-list { max-height: 260px; overflow-y: auto; border-top: 1px solid var(--line); }
+.dock.collapsed .dock-list { display: none; }
+.job { padding: 10px 14px; border-bottom: 1px solid var(--line); font-size: 12.5px; }
+.job:last-child { border-bottom: 0; }
+.job-top { display: flex; justify-content: space-between; gap: 8px; }
+.job-msg { color: var(--muted); font-size: 12px; margin-top: 2px; }
+.job-msg.err { color: var(--err); }
+.job .meter { margin-top: 6px; }
+.job.done .meter i { background: var(--ok); }
+.job.error .meter i { background: var(--err); }
+.toasts { position: fixed; top: 18px; right: 18px; display: grid; gap: 8px; z-index: 30; }
+.toast { background: var(--panel-2); border: 1px solid var(--line-2); border-left: 3px solid var(--gold); border-radius: 10px; padding: 10px 14px; box-shadow: var(--shadow); max-width: 360px; animation: slide .25s ease-out; font-size: 13px; }
+.toast.ok { border-left-color: var(--ok); } .toast.err { border-left-color: var(--err); }
+@keyframes slide { from { opacity: 0; transform: translateY(-6px); } }
+.spin { width: 14px; height: 14px; border: 2px solid rgba(255,255,255,.2); border-top-color: var(--gold); border-radius: 50%; animation: rot .8s linear infinite; display: inline-block; vertical-align: -2px; }
+@keyframes rot { to { transform: rotate(360deg); } }
+.drawer { margin-top: 12px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 14px 16px; }
+.sent { display: grid; grid-template-columns: 92px 30px 1fr; gap: 8px; padding: 5px 0; border-bottom: 1px dashed var(--line); font-size: 13px; }
+.sent:last-child { border-bottom: 0; }
+.sent .t { color: var(--muted); font-variant-numeric: tabular-nums; font-size: 12px; }
+</style>
+</head>
+<body>
+<div class="app">
+  <aside class="sidebar">
+    <div class="brand">
+      <div class="logo">巨</div>
+      <div><div class="brand-name">巨航剪辑工作台</div><div class="brand-sub">口播素材 → 粤语带货短视频</div></div>
+    </div>
+    <div class="gpu" id="gpu"><div class="gpu-top"><span class="dot"></span>正在检测 GPU…</div></div>
+    <div class="side-label">拍摄批次</div>
+    <nav id="batches"></nav>
+    <div class="side-foot" id="sideFoot"></div>
+  </aside>
+  <main class="main" id="view"></main>
+</div>
+<div class="dock collapsed" id="dock" style="display:none">
+  <div class="dock-head" onclick="toggleDock()"><span class="dot" id="dockDot"></span><span class="grow" id="dockTitle">任务</span><span class="sub" id="dockArrow">展开</span></div>
+  <div class="dock-list" id="dockList"></div>
+</div>
+<div class="toasts" id="toasts"></div>
+
+<script>
+/* ================= 工具 ================= */
+const $ = (s) => document.querySelector(s);
+const enc = encodeURIComponent;
+const esc = (s) => String(s ?? "").replace(/[&<>"']/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+async function api(path, opt = {}) {
+  const r = await fetch(path, { headers: { "Content-Type": "application/json" }, ...opt });
+  if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText);
+  return r.json();
+}
+const mmss = (t) => `${Math.floor(t / 60)}:${String(Math.floor(t % 60)).padStart(2, "0")}`;
+const tsec = (t) => `${Math.floor(t / 60)}:${(t % 60).toFixed(1).padStart(4, "0")}`;
+const mins = (s) => (s / 60).toFixed(1);
+const shortClip = (c) => c.replace(/^\d{4}_\d\d_\d\d_[\d_]+_/, "").replace(/\.\w+$/, "");
+const langTag = (l) => `<span class="lang ${l === "yue" ? "yue" : l === "zh" ? "zh" : "other"}">${l === "yue" ? "粤" : l === "zh" ? "普" : esc(l)}</span>`;
+const ROLE = { hook: ["开头", "var(--hook)"], product: ["讲解", "var(--product)"], cta: ["结尾", "var(--cta)"] };
+const VOICE = { auto: "自动", original: "保留原声", tts_all: "全部配音" };
+const STATUS = { draft: ["待审核", "draft"], approved: ["已确认", "gold"], rendered: ["已出片", "ok"] };
+
+function toast(msg, type = "") {
+  const el = document.createElement("div");
+  el.className = "toast " + type; el.textContent = msg;
+  $("#toasts").appendChild(el);
+  setTimeout(() => el.remove(), type === "err" ? 7000 : 3500);
+}
+
+/* ================= 状态 ================= */
+const S = { batch: null, tab: "scripts", script: null, dirty: false, active: -1, info: {}, batches: [] };
+
+/* ================= 侧边栏 ================= */
+async function loadInfo() {
+  S.info = await api("/api/info");
+  $("#sideFoot").innerHTML = `
+    <div>配音引擎　<b>${S.info.tts === "cosyvoice3" ? "CosyVoice3（本地）" : "Azure 粤语"}</b></div>
+    <div>出脚本　　<b>${esc(S.info.llm)}</b> ${S.info.llm_ready ? "" : '<span style="color:var(--warn)">未填 Key</span>'}</div>
+    <div>素材和成片都在本机，审核前不会出片</div>`;
+}
+async function loadGpu() {
+  try {
+    const g = await api("/api/gpu");
+    const [used, total] = (g.mem || "0/0").replace(" MB", "").split("/").map(Number);
+    const memPct = total ? (used / total) * 100 : 0;
+    $("#gpu").innerHTML = `
+      <div class="gpu-top"><span class="dot ${g.busy ? "busy" : g.state === "running" ? "ok" : ""}"></span>
+        <b>${g.mode === "local" ? "本机 GPU" : "AutoDL"}</b><span class="sub" style="margin-left:auto">${g.busy ? "工作中" : "空闲"}</span></div>
+      <div class="gpu-name">${esc(g.name || "")}</div>
+      <div class="meter"><i style="width:${memPct.toFixed(0)}%"></i></div>
+      <div class="gpu-foot"><span>显存 ${used ? (used / 1024).toFixed(1) : "-"} / ${total ? (total / 1024).toFixed(0) : "-"} GB</span><span>占用 ${esc(g.util || "-")}</span></div>`;
+  } catch { $("#gpu").innerHTML = `<div class="gpu-top"><span class="dot"></span>GPU 状态获取失败</div>`; }
+}
+async function loadBatches() {
+  S.batches = await api("/api/batches");
+  $("#batches").innerHTML = S.batches.map((b) => {
+    const tp = b.clips ? (b.transcribed / b.clips) * 100 : 0;
+    const steps = [
+      tp >= 100 ? "on" : tp > 0 ? "part" : "",
+      b.scripts ? "on" : "",
+      b.rendered ? (b.rendered >= b.scripts ? "on" : "part") : "",
+    ];
+    return `<button class="batch ${b.batch === S.batch ? "active" : ""}" onclick="selectBatch('${esc(b.batch)}')">
+      <div class="batch-head"><span class="batch-date">${esc(b.batch)}</span><span class="batch-meta">${b.clips} 条${b.total_seconds ? " · " + mins(b.total_seconds) + " 分" : ""}</span></div>
+      <div class="batch-meta">${b.scripts ? `${b.scripts} 条脚本 · ${b.rendered} 条已出片` : b.transcribed ? `已识别 ${b.transcribed}/${b.clips}` : "未处理"}</div>
+      <div class="mini-steps">${steps.map((s, i) => `<span class="${s}" style="--p:${i === 0 ? tp : b.scripts ? (b.rendered / b.scripts) * 100 : 0}%"></span>`).join("")}</div>
+    </button>`;
+  }).join("");
+}
+
+/* ================= 首页 ================= */
+function renderWelcome() {
+  $("#view").innerHTML = `
+    <div class="welcome">
+      <div class="eyebrow">JUHANG STUDIO</div>
+      <h1>选一个拍摄批次开始</h1>
+      <div class="sub">左边按拍摄日期列出素材文件夹。一键识别后，大模型按参考成片的结构出剪辑脚本，你审核确认后再出片。</div>
+      <div class="flow">
+        <div><b>01</b>语音识别<div class="sub">标出每句是粤语还是普通话</div></div>
+        <div><b>02</b>出剪辑脚本<div class="sub">开头钩子 → 逐只表讲解 → 结尾引导</div></div>
+        <div><b>03</b>人工审核<div class="sub">改字幕、删句、试听配音</div></div>
+        <div><b>04</b>出片<div class="sub">1440×2560 · 60fps · 字幕角标</div></div>
+      </div>
+    </div>`;
+}
+
+/* ================= 批次页 ================= */
+async function selectBatch(batch) {
+  if (S.dirty && !confirm("当前脚本有未保存的修改，确定离开？")) return;
+  S.batch = batch; S.script = null; S.dirty = false;
+  await loadBatches();
+  await renderBatch();
+}
+
+async function renderBatch() {
+  const b = S.batches.find((x) => x.batch === S.batch);
+  const [tr, scripts, clips] = await Promise.all([
+    api(`/api/batches/${enc(S.batch)}/transcripts`).then((t) => t.stats),
+    api(`/api/batches/${enc(S.batch)}/scripts`),
+    api(`/api/batches/${enc(S.batch)}/clips`),
+  ]);
+  S.clips = clips; S.scripts = scripts;
+  const totalSec = clips.reduce((a, c) => a + c.duration, 0);
+  const sp = Object.values(tr).reduce((a, v) => a + v, 0) || 0;
+  const yue = tr.yue || 0, zh = tr.zh || 0, other = Math.max(0, sp - yue - zh);
+  const tDone = b.transcribed >= b.clips && b.clips > 0;
+  const rendered = scripts.filter((s) => s.status === "rendered").length;
+  const pending = scripts.length - rendered;
+  const st = (done, doing) => (done ? "done" : doing ? "doing" : "");
+  let cta;
+  if (!scripts.length) cta = `<button class="btn primary" onclick="startGenerate()">✦ 一键识别并出脚本</button>`;
+  else if (pending) cta = `<button class="btn primary" onclick="renderAll()">▶ 全部出片（${pending} 条）</button>`;
+  else cta = `<button class="btn" onclick="startGenerate()">重新出脚本</button>`;
+
+  $("#view").innerHTML = `
+    <div class="page-head">
+      <div><div class="eyebrow">拍摄批次</div><h1>${esc(S.batch)}</h1>
+        <div class="sub">${b.clips} 条素材 · ${mins(totalSec)} 分钟 · 4K 竖拍</div></div>
+      <div class="row">${b.transcribed < b.clips ? `<button class="btn ghost" onclick="startTranscribe()">只做识别</button>` : ""}${cta}</div>
+    </div>
+    <div class="stepper">
+      <div class="step ${st(tDone, b.transcribed > 0)}"><div class="step-n">${tDone ? "✓" : 1}</div><div class="step-title">语音识别</div><div class="step-desc">${b.transcribed}/${b.clips} 条素材</div><div class="step-bar" style="width:${b.clips ? (b.transcribed / b.clips) * 100 : 0}%"></div></div>
+      <div class="step ${st(scripts.length > 0, false)}"><div class="step-n">${scripts.length ? "✓" : 2}</div><div class="step-title">出剪辑脚本</div><div class="step-desc">${scripts.length ? scripts.length + " 条脚本" : "大模型按参考结构选句"}</div></div>
+      <div class="step ${st(scripts.length && scripts.every((s) => s.status !== "draft"), scripts.some((s) => s.status !== "draft"))}"><div class="step-n">${scripts.length && scripts.every((s) => s.status !== "draft") ? "✓" : 3}</div><div class="step-title">人工审核</div><div class="step-desc">${scripts.filter((s) => s.status !== "draft").length}/${scripts.length || 0} 条已确认</div></div>
+      <div class="step ${st(scripts.length && !pending, rendered > 0)}"><div class="step-n">${scripts.length && !pending ? "✓" : 4}</div><div class="step-title">出片</div><div class="step-desc">${rendered} 条成片</div><div class="step-bar" style="width:${scripts.length ? (rendered / scripts.length) * 100 : 0}%"></div></div>
+    </div>
+    <div class="stats">
+      <div class="stat"><div class="stat-label">素材语种（已识别部分）</div>
+        ${sp ? `<div class="langbar"><span style="width:${(yue / sp) * 100}%;background:var(--yue)"></span><span style="width:${(zh / sp) * 100}%;background:var(--zh)"></span><span style="width:${(other / sp) * 100}%;background:#555"></span></div>
+        <div class="legend"><span><i style="background:var(--yue)"></i>粤语 ${mins(yue)} 分</span><span><i style="background:var(--zh)"></i>普通话 ${mins(zh)} 分</span>${other > 5 ? `<span><i style="background:#555"></i>其他 ${mins(other)} 分</span>` : ""}</div>`
+        : `<div class="sub" style="margin-top:10px">识别后显示粤语和普通话各占多少</div>`}</div>
+      <div class="stat"><div class="stat-label">人声时长</div><div class="stat-value">${mins(sp)}<small>分钟</small></div></div>
+      <div class="stat"><div class="stat-label">剪辑脚本</div><div class="stat-value">${scripts.length}<small>条</small></div></div>
+      <div class="stat"><div class="stat-label">成片</div><div class="stat-value">${rendered}<small>条</small></div></div>
+    </div>
+    <div class="tabs">
+      <button class="tab ${S.tab === "scripts" ? "on" : ""}" onclick="S.tab='scripts';renderBatch()">剪辑脚本<span class="count">${scripts.length}</span></button>
+      <button class="tab ${S.tab === "clips" ? "on" : ""}" onclick="S.tab='clips';renderBatch()">素材库<span class="count">${clips.length}</span></button>
+    </div>
+    <div id="tabBody"></div>`;
+  S.tab === "scripts" ? renderScriptGrid() : renderClips();
+}
+
+function renderScriptGrid() {
+  const list = S.scripts;
+  if (!list.length) {
+    $("#tabBody").innerHTML = `<div class="empty"><h3>还没有剪辑脚本</h3>点右上角「一键识别并出脚本」，识别完会自动让大模型出脚本，出完停下来等你审核。</div>`;
+    return;
+  }
+  $("#tabBody").innerHTML = `<div class="grid">${list.map((s) => {
+    const first = s.lines[0] || {};
+    const cover = s.has_output ? `/api/output_thumb/${enc(S.batch)}/${enc(s.id)}.jpg` : first.clip ? `/api/thumb?batch=${enc(S.batch)}&clip=${enc(first.clip)}&t=${((first.start + first.end) / 2).toFixed(1)}` : "";
+    const [stTxt, stCls] = STATUS[s.status] || STATUS.draft;
+    const zh = s.lines.filter((l) => l.src_lang === "zh").length;
+    return `<div class="card">
+      <div class="card-cover" style="background-image:url('${cover}')" onclick="openScript('${esc(s.id)}')">
+        <span class="badge ${stCls}">${stTxt}</span>
+        <div class="title">${esc(s.title)}</div><span class="dur">${s.duration}s</span>
+      </div>
+      <div class="card-body">
+        <div class="card-meta"><span>${s.lines.length} 句</span>·<span>${s.resolved_voice === "tts_all" ? "粤语配音" : "保留原声"}${s.voice_mode === "auto" ? "（自动）" : ""}</span>${zh ? `·<span class="lang zh">普 ${zh}</span>` : ""}</div>
+        <div class="card-actions">
+          <button class="btn sm" onclick="openScript('${esc(s.id)}')">审核</button>
+          ${s.has_output ? `<a class="btn sm" href="/api/outputs/${enc(S.batch)}/${enc(s.id)}.mp4" download style="text-decoration:none">下载</a>` : `<button class="btn sm" onclick="renderOne('${esc(s.id)}')">出片</button>`}
+        </div>
+      </div>
+    </div>`;
+  }).join("")}</div>`;
+}
+
+function renderClips() {
+  const clips = S.clips;
+  $("#tabBody").innerHTML = `<div class="clips">${clips.map((c, i) => {
+    const sp = Object.values(c.lang).reduce((a, v) => a + v, 0) || 0;
+    const y = c.lang.yue || 0, z = c.lang.zh || 0;
+    return `<div class="clip" onclick="showTranscript(${i})">
+      <img loading="lazy" src="/api/thumb?batch=${enc(S.batch)}&clip=${enc(c.clip)}&t=${Math.min(3, c.duration / 2).toFixed(1)}">
+      <div>
+        <div class="row" style="justify-content:space-between"><span class="clip-name">${esc(shortClip(c.clip))}</span><span class="sub" style="font-size:12px">${mmss(c.duration)}</span></div>
+        ${c.transcribed ? `<div class="langbar" style="margin:6px 0 4px"><span style="width:${sp ? (y / sp) * 100 : 0}%;background:var(--yue)"></span><span style="width:${sp ? (z / sp) * 100 : 0}%;background:var(--zh)"></span></div>
+          <div class="sub" style="font-size:12px">${c.sentences} 句 · 粤 ${Math.round(y)}s · 普 ${Math.round(z)}s</div>
+          <div class="clip-text">${esc(c.preview_text || "")}</div>`
+        : `<div class="sub" style="font-size:12px;margin-top:6px">未识别</div>`}
+      </div>
+    </div>`;
+  }).join("")}</div><div id="transcriptBox"></div>`;
+}
+
+async function showTranscript(i) {
+  const c = S.clips[i];
+  if (!c.transcribed) return toast("这条素材还没识别");
+  const t = await api(`/api/batches/${enc(S.batch)}/transcripts/${enc(c.clip)}`);
+  $("#transcriptBox").innerHTML = `<div class="drawer">
+    <div class="row" style="justify-content:space-between;margin-bottom:8px"><b>${esc(shortClip(c.clip))} 识别文字</b><span class="sub">${t.sentences.length} 句</span></div>
+    ${t.sentences.map((s) => `<div class="sent"><span class="t">${tsec(s.start)}–${tsec(s.end)}</span>${langTag(s.lang)}<span>${esc(s.text)}</span></div>`).join("")}
+  </div>`;
+  $("#transcriptBox").scrollIntoView({ behavior: "smooth", block: "start" });
+}
+
+/* ================= 审核页 ================= */
+async function openScript(id) {
+  const list = await api(`/api/batches/${enc(S.batch)}/scripts`);
+  S.script = list.find((s) => s.id === id);
+  S.dirty = false; S.active = -1;
+  renderEditor();
+  window.scrollTo({ top: 0 });
+  if (S.script.has_output) showOutput();
+}
+
+function markDirty() { S.dirty = true; const el = $("#saveState"); if (el) { el.textContent = "有未保存的修改"; el.classList.add("dirty"); } }
+
+function renderEditor() {
+  const s = S.script;
+  const dur = s.lines.reduce((a, l) => a + (l.end - l.start), 0);
+  const zh = s.lines.some((l) => l.src_lang === "zh");
+  const resolved = s.voice_mode === "auto" ? (zh ? "tts_all" : "original") : s.voice_mode;
+  const [stTxt, stCls] = STATUS[s.status] || STATUS.draft;
+  $("#view").innerHTML = `
+    <button class="back" onclick="leaveEditor()">← 返回 ${esc(S.batch)}</button>
+    <div class="editor-head">
+      <input class="title-input" value="${esc(s.title)}" oninput="S.script.title=this.value;markDirty()">
+      <span class="badge ${stCls}">${stTxt}</span>
+    </div>
+    <div class="row" style="margin-top:8px">
+      <span class="sub">配音</span>
+      <div class="seg">${Object.entries(VOICE).map(([k, v]) => `<button class="${s.voice_mode === k ? "on" : ""}" onclick="setVoice('${k}')">${v}</button>`).join("")}</div>
+      <span class="voice-note">${resolved === "tts_all" ? `整条用 ${S.info.tts === "cosyvoice3" ? "CosyVoice3" : "Azure"} 粤语配音${s.voice_mode === "auto" ? "（有普通话句子）" : ""}` : "保留老板原声"}</span>
+      <span class="sub" style="margin-left:auto">${s.lines.length} 句 · 原声约 ${dur.toFixed(1)} 秒</span>
+    </div>
+    <div class="timeline">${s.lines.map((l, i) => `<div class="${l.src_lang === "zh" ? "zh" : ""} ${i === S.active ? "on" : ""}" title="${i + 1}. ${esc(l.subtitle)}" style="flex:${Math.max(0.3, l.end - l.start)};background:${(ROLE[l.role] || ROLE.product)[1]}" onclick="focusLine(${i})"></div>`).join("")}</div>
+    <div class="tl-legend"><span><i style="background:var(--hook)"></i>开头</span><span><i style="background:var(--product)"></i>讲解</span><span><i style="background:var(--cta)"></i>结尾</span><span><i style="background:var(--zh)"></i>底部橙线：原话是普通话</span></div>
+    <div class="editor">
+      <div>
+        <div class="lines">${s.lines.map(lineHtml).join("")}</div>
+        <div class="savebar">
+          <span class="grow" id="saveState">${S.dirty ? "有未保存的修改" : "已保存"}</span>
+          <button class="btn danger sm" onclick="deleteScript()">删除脚本</button>
+          <button class="btn" onclick="saveScript()">保存 <span class="sub" style="font-size:11px">Ctrl+S</span></button>
+          <button class="btn primary" onclick="saveAndRender()">确认并出片</button>
+        </div>
+      </div>
+      <div class="preview-col">
+        <div class="phone"><div class="phone-screen" id="screen"><div>点句子右边的「原片」或「配音」预览<br>出片后这里播放成片</div></div></div>
+        <div class="preview-cap" id="previewCap"></div>
+        <div class="row" id="previewBtns">${s.has_output ? `<button class="btn sm" onclick="showOutput()">看成片</button><a class="btn sm" style="text-decoration:none" href="/api/outputs/${enc(S.batch)}/${enc(s.id)}.mp4" download>下载 MP4</a>` : ""}</div>
+      </div>
+    </div>
+    <audio id="ttsAudio"></audio>`;
+  if (S.dirty) markDirty();
+}
+
+function chunkWarn(text) {
+  return text.split(/[，,、；;]/).some((p) => p.trim().length > 16);
+}
+function lineHtml(l, i) {
+  const [rTxt, rColor] = ROLE[l.role] || ROLE.product;
+  const n = l.subtitle.replace(/[，,。.！!？?、\s]/g, "").length;
+  return `<div class="line ${i === S.active ? "on" : ""}" id="line${i}" style="--role:${rColor}">
+    <div class="line-n">${i + 1}</div>
+    <div>
+      <div class="src-text">${langTag(l.src_lang)} ${esc(l.src_text)}</div>
+      <div class="src-meta">${esc(shortClip(l.clip))} · ${tsec(l.start)}–${tsec(l.end)} · ${(l.end - l.start).toFixed(1)}s</div>
+    </div>
+    <div class="sub-col">
+      <textarea rows="1" oninput="S.script.lines[${i}].subtitle=this.value;markDirty();updCount(${i},this.value)" onfocus="S.active=${i}">${esc(l.subtitle)}</textarea>
+      <div class="sub-info"><span>粤语字幕 · 也是配音文案</span><span id="cnt${i}" class="${chunkWarn(l.subtitle) ? "warn" : ""}">${n} 字${chunkWarn(l.subtitle) ? " · 单段太长，建议加逗号" : ""}</span></div>
+    </div>
+    <div class="ctl">
+      <div class="row">
+        <select title="镜头作用" onchange="S.script.lines[${i}].role=this.value;markDirty();renderEditor()">${Object.entries(ROLE).map(([k, [v]]) => `<option value="${k}" ${l.role === k ? "selected" : ""}>${v}</option>`).join("")}</select>
+        <select title="画面放大" onchange="S.script.lines[${i}].zoom=this.value===''?null:parseFloat(this.value);markDirty()">${[["", "自动放大"], ["1", "不放大"], ["1.15", "×1.15"], ["1.25", "×1.25"], ["1.4", "×1.4"]].map(([k, v]) => `<option value="${k}" ${String(l.zoom ?? "") === k ? "selected" : ""}>${v}</option>`).join("")}</select>
+      </div>
+      <div class="row">
+        <button class="btn sm" onclick="previewSrc(${i})">原片</button>
+        <button class="btn sm" onclick="previewTts(${i})">配音</button>
+        <button class="btn sm icon" title="上移" onclick="moveLine(${i},-1)">↑</button>
+        <button class="btn sm icon" title="下移" onclick="moveLine(${i},1)">↓</button>
+        <button class="btn sm icon danger" title="删除这句" onclick="delLine(${i})">✕</button>
+      </div>
+    </div>
+  </div>`;
+}
+function updCount(i, v) {
+  const n = v.replace(/[，,。.！!？?、\s]/g, "").length, w = chunkWarn(v), el = $("#cnt" + i);
+  el.textContent = `${n} 字${w ? " · 单段太长，建议加逗号" : ""}`; el.className = w ? "warn" : "";
+}
+function focusLine(i) { S.active = i; renderEditor(); $("#line" + i).scrollIntoView({ behavior: "smooth", block: "center" }); previewSrc(i); }
+function setVoice(k) { S.script.voice_mode = k; markDirty(); renderEditor(); }
+function moveLine(i, d) { const L = S.script.lines, j = i + d; if (j < 0 || j >= L.length) return; [L[i], L[j]] = [L[j], L[i]]; markDirty(); renderEditor(); }
+function delLine(i) { S.script.lines.splice(i, 1); markDirty(); renderEditor(); toast(`已删除第 ${i + 1} 句，保存后生效`); }
+function leaveEditor() { if (S.dirty && !confirm("有未保存的修改，确定返回？")) return; S.dirty = false; S.script = null; renderBatch(); }
+
+function setScreen(html, cap) { $("#screen").innerHTML = html; $("#previewCap").innerHTML = cap || ""; }
+function showOutput() {
+  const s = S.script;
+  setScreen(`<video controls autoplay src="/api/outputs/${enc(S.batch)}/${enc(s.id)}.mp4?t=${Date.now()}"></video>`, "成片");
+}
+function previewSrc(i) {
+  const l = S.script.lines[i];
+  S.active = i; document.querySelectorAll(".line").forEach((el, k) => el.classList.toggle("on", k === i));
+  setScreen(`<div><span class="spin"></span> 正在截取原片…</div>`, "");
+  const url = `/api/preview_clip?batch=${enc(S.batch)}&clip=${enc(l.clip)}&start=${l.start}&end=${l.end}`;
+  setScreen(`<video controls autoplay src="${url}"></video>`, `第 ${i + 1} 句原片 · ${langTag(l.src_lang)} ${esc(l.src_text)}`);
+}
+async function previewTts(i) {
+  const l = S.script.lines[i];
+  toast(`正在生成第 ${i + 1} 句配音…`);
+  const j = await api("/api/tts/preview", { method: "POST", body: JSON.stringify({ text: l.subtitle }) });
+  watchJob(j.id, (job) => { const a = $("#ttsAudio"); if (!a) return; a.src = "/api/tts/file?path=" + enc(job.result); a.play(); $("#previewCap").innerHTML = `正在播放第 ${i + 1} 句粤语配音：${esc(l.subtitle)}`; });
+}
+
+function cleanScript(status) {
+  const s = { ...S.script };
+  ["duration", "resolved_voice", "has_output"].forEach((k) => delete s[k]);
+  if (status) s.status = status;
+  return s;
+}
+async function saveScript(status) {
+  const s = cleanScript(status);
+  await api(`/api/batches/${enc(S.batch)}/scripts/${enc(s.id)}`, { method: "PUT", body: JSON.stringify(s) });
+  S.script.status = s.status; S.dirty = false;
+  const el = $("#saveState"); if (el) { el.textContent = "已保存 " + new Date().toLocaleTimeString(); el.classList.remove("dirty"); }
+  if (!status) toast("已保存", "ok");
+  loadBatches();
+}
+async function saveAndRender() {
+  await saveScript("approved");
+  const j = await api(`/api/batches/${enc(S.batch)}/scripts/${enc(S.script.id)}/render`, { method: "POST" });
+  toast("已加入出片队列");
+  const id = S.script.id;
+  watchJob(j.id, async () => { toast(`${id} 出片完成`, "ok"); if (S.script && S.script.id === id) await openScript(id); else if (S.batch) renderBatch(); loadBatches(); });
+}
+async function renderOne(id) {
+  const j = await api(`/api/batches/${enc(S.batch)}/scripts/${enc(id)}/render`, { method: "POST" });
+  toast("已加入出片队列");
+  watchJob(j.id, () => { toast(`${id} 出片完成`, "ok"); if (!S.script) renderBatch(); loadBatches(); });
+}
+async function renderAll() {
+  if (!confirm("把还没出片的脚本全部按当前内容出片？没审核过的也会直接出。")) return;
+  const list = await api(`/api/batches/${enc(S.batch)}/render_all`, { method: "POST" });
+  toast(`已加入 ${list.length} 条出片任务`);
+  list.forEach((j) => watchJob(j.id, () => { if (!S.script) renderBatch(); loadBatches(); }));
+}
+async function deleteScript() {
+  if (!confirm("删除这条剪辑脚本？")) return;
+  await api(`/api/batches/${enc(S.batch)}/scripts/${enc(S.script.id)}`, { method: "DELETE" });
+  S.script = null; S.dirty = false; toast("已删除"); await loadBatches(); renderBatch();
+}
+async function startTranscribe() {
+  const j = await api(`/api/batches/${enc(S.batch)}/transcribe`, { method: "POST" });
+  toast("已开始识别"); watchJob(j.id, async () => { toast("识别完成", "ok"); await loadBatches(); if (!S.script) renderBatch(); });
+}
+async function startGenerate() {
+  const j = await api(`/api/batches/${enc(S.batch)}/generate`, { method: "POST" });
+  toast("已开始：先识别，再出脚本"); watchJob(j.id, async (job) => { toast(`脚本已生成，共 ${job.result.length} 条，等你审核`, "ok"); S.tab = "scripts"; await loadBatches(); if (!S.script) renderBatch(); });
+}
+
+/* ================= 任务浮窗 ================= */
+const callbacks = {};
+let dockOpen = false, lastBusy = false;
+function watchJob(id, cb) { callbacks[id] = cb; dockOpen = true; refreshJobs(); }
+function toggleDock() { dockOpen = !dockOpen; refreshJobs(); }
+async function refreshJobs() {
+  let list = [];
+  try { list = await api("/api/jobs"); } catch { return; }
+  const active = list.filter((j) => j.status === "queued" || j.status === "running");
+  const dock = $("#dock");
+  dock.style.display = list.length ? "" : "none";
+  dock.classList.toggle("collapsed", !dockOpen);
+  $("#dockDot").className = "dot " + (active.length ? "busy" : "ok");
+  $("#dockTitle").textContent = active.length ? `${active.length} 个任务进行中` : "任务都完成了";
+  $("#dockArrow").textContent = dockOpen ? "收起" : "展开";
+  $("#dockList").innerHTML = list.slice(0, 10).map((j) => `
+    <div class="job ${j.status}">
+      <div class="job-top"><span>${esc(j.title)}</span><span class="sub">${{ queued: "排队", running: Math.round(j.progress * 100) + "%", done: "完成", error: "出错" }[j.status]}</span></div>
+      <div class="job-msg ${j.status === "error" ? "err" : ""}">${esc(j.status === "error" ? j.error.split("\n")[0] : j.message)}</div>
+      <div class="meter"><i style="width:${j.status === "done" ? 100 : Math.round(j.progress * 100)}%"></i></div>
+    </div>`).join("");
+  for (const j of list) {
+    const cb = callbacks[j.id];
+    if (cb && (j.status === "done" || j.status === "error")) {
+      delete callbacks[j.id];
+      if (j.status === "done") cb(j); else toast(`${j.title} 出错：${j.error.split("\n")[0]}`, "err");
+    }
+  }
+  if (lastBusy && !active.length) loadGpu();
+  lastBusy = active.length > 0;
+}
+
+document.addEventListener("keydown", (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key === "s" && S.script) { e.preventDefault(); saveScript(); }
+});
+window.addEventListener("beforeunload", (e) => { if (S.dirty) { e.preventDefault(); e.returnValue = ""; } });
+
+setInterval(refreshJobs, 1500);
+setInterval(loadGpu, 5000);
+loadInfo(); loadGpu(); loadBatches(); renderWelcome(); refreshJobs();
+</script>
+</body>
+</html>

@@ -1,0 +1,64 @@
+{
+  "id": "three-watches-pilot",
+  "title": "三隻錶｜產品圖試片",
+  "shots": [
+    {
+      "id": "01-hook",
+      "image": "产品1/01c3cb273504c00b51ce58a3ca0c4621.jpg",
+      "seconds": 3,
+      "subtitle": "今日睇三隻錶",
+      "motion": "Open on the angled full watch exactly as framed. Slowly push the camera in a few centimeters toward the black dial. Keep the black glove and watch steady."
+    },
+    {
+      "id": "02-black-dial",
+      "image": "产品1/9bd566918acf356f635b18c0c161e7a6.jpg",
+      "seconds": 4,
+      "subtitle": "先睇黑色錶面",
+      "motion": "A nearly static straight-on inspection of the black dial. A slight forward camera drift and one soft existing reflection on the steel bezel. Keep the dial, date window and bezel markings sharp and stable."
+    },
+    {
+      "id": "03-steel-clasp-locked",
+      "image": "产品1/7869afe9dd1d245d15d91e87355feba0.jpg",
+      "seconds": 3,
+      "subtitle": "再睇吓個錶扣",
+      "motion": "The open steel folding clasp rests steadily in the black glove. The camera remains locked on this exact exposed steel clasp for the entire shot. Both pieces keep their original angle and only the soft reflected light shifts slightly. The clasp remains the sole subject, with the watch face outside the frame.",
+      "lock_view": true
+    },
+    {
+      "id": "04-gold-dial",
+      "image": "产品2/c8e443fcf226828d8465e3f78fe2baf6.jpg",
+      "seconds": 4,
+      "subtitle": "第二隻係金色錶面",
+      "motion": "Hold the cushion and gloved hand still. Give the complete gold-tone watch a restrained, straight camera push-in. Preserve the photographed dial and the original room light."
+    },
+    {
+      "id": "05-on-wrist",
+      "image": "产品2/33be0be79b81f62207ef7323296db7d2.jpg",
+      "seconds": 3,
+      "subtitle": "睇吓上手效果",
+      "motion": "Keep the wrist and bracelet fixed in the photographed pose. Gently drift the camera closer, with the out-of-focus greenery remaining behind it. Keep the full dial and visible bracelet in frame."
+    },
+    {
+      "id": "06-brown-dial",
+      "image": "产品3/191e56ab3759b8029476956f3888e085.jpg",
+      "seconds": 4,
+      "subtitle": "第三隻睇深啡錶面",
+      "motion": "Frame the same watch resting on its light cushion. An extremely slow camera push toward the brown dial. The two subdials, hands, bezel shape and bracelet remain exactly aligned and unchanged."
+    },
+    {
+      "id": "07-gold-clasp-locked",
+      "image": "产品3/c3078edbe4a68b66ccb44fbff694661c.jpg",
+      "seconds": 3,
+      "subtitle": "錶扣細節都睇吓",
+      "prompt": "One still macro take of the exact brushed rose-gold watch clasp resting on the cream fabric cushion. The bracelet and clasp emblem stay fixed in the precise photographed alignment for the full shot. The camera maintains the same field of view and a very subtle light reflection glides across the steel-colored highlight on the clasp. The original bracelet, original cushion and soft background fill the vertical frame from start to finish.",
+      "lock_view": true
+    },
+    {
+      "id": "08-close",
+      "image": "产品3/267a7d61b07ff4596970c32b1f5d206b.jpg",
+      "seconds": 3,
+      "subtitle": "你會揀邊隻？",
+      "motion": "Return to a wider view of the complete watch on its cushion. Slowly settle into an almost static final frame. Preserve the original composition and all visible watch details."
+    }
+  ]
+}

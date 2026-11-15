@@ -1,0 +1,536 @@
+"""巨航剪辑工作台：本机网页服务。
+
+启动：双击 start.bat，或运行  .venv/Scripts/python.exe app.py
+然后浏览器打开 http://127.0.0.1:8765
+"""
+from __future__ import annotations
+
+import json
+import subprocess
+from pathlib import Path
+
+import uvicorn
+from fastapi import Body, FastAPI, HTTPException
+from fastapi.responses import FileResponse, HTMLResponse
+
+from jh import asr, config, media, render, script as scriptmod, tts
+from jh.jobs import JobQueue
+
+app = FastAPI(title="巨航剪辑工作台")
+jobs = JobQueue()
+WEB = Path(__file__).parent / "web"
+
+
+def _batch_dir(batch: str) -> Path:
+    d = config.material_root() / batch
+    if not d.is_dir() or ".." in batch:
+        raise HTTPException(404, f"找不到批次 {batch}")
+    return d
+
+
+def _transcript_dir(batch: str) -> Path:
+    return config.data_root() / "transcripts" / batch
+
+
+def _load_transcripts(batch: str) -> list[dict]:
+    d = _transcript_dir(batch)
+    clips = media.list_clips(_batch_dir(batch))
+    out = []
+    for c in clips:
+        f = d / f"{c.stem}.json"
+        if f.exists():
+            out.append(json.loads(f.read_text(encoding="utf-8")))
+    return out
+
+
+# ---------------- 页面 ----------------
+
+DIST = Path(__file__).parent / "frontend" / "dist"   # React 前端打包结果（cd frontend && npm run build）
+
+
+@app.get("/", response_class=HTMLResponse)
+def index():
+    # 优先用打包好的 React 前端；没打包时退回旧的单文件页面
+    page = DIST / "index.html" if (DIST / "index.html").exists() else WEB / "index.html"
+    return page.read_text(encoding="utf-8")
+
+
+@app.get("/assets/{name}")
+def assets(name: str):
+    f = (DIST / "assets" / name).resolve()
+    if (DIST / "assets").resolve() not in f.parents or not f.exists():
+        raise HTTPException(404)
+    return FileResponse(f, headers={"Cache-Control": "public, max-age=31536000, immutable"})
+
+
+@app.get("/favicon.svg")
+def favicon():
+    return FileResponse(DIST / "favicon.svg", media_type="image/svg+xml")
+
+
+# ---------------- GPU ----------------
+
+@app.get("/api/gpu")
+def gpu_status():
+    mode = config.load().get("gpu", {}).get("mode", "local")
+    info = {"mode": mode, "busy": jobs.busy()}
+    if mode == "local":
+        try:
+            r = subprocess.run(["nvidia-smi", "--query-gpu=name,memory.used,memory.total,utilization.gpu",
+                                "--format=csv,noheader,nounits"], capture_output=True, text=True, timeout=5)
+            name, used, total, util = [x.strip() for x in r.stdout.strip().split(",")]
+            info.update(state="running", name=name, mem=f"{used}/{total} MB", util=f"{util}%")
+        except Exception:  # noqa: BLE001
+            info.update(state="unknown", name="本机 GPU")
+    return info
+
+
+# ---------------- 批次 ----------------
+
+@app.get("/api/batches")
+def batches():
+    root = config.material_root()
+    out = []
+    for d in sorted(p for p in root.iterdir() if p.is_dir()):
+        clips = media.list_clips(d)
+        done = sum((_transcript_dir(d.name) / f"{c.stem}.json").exists() for c in clips)
+        scripts = scriptmod.list_scripts(d.name)
+        outputs = list((config.data_root() / "outputs" / d.name).glob("*.mp4")) \
+            if (config.data_root() / "outputs" / d.name).exists() else []
+        cache = config.data_root() / "clipinfo" / f"{d.name}.json"
+        total = sum(json.loads(cache.read_text(encoding="utf-8")).values()) if cache.exists() else None
+        out.append({"batch": d.name, "clips": len(clips), "transcribed": done, "total_seconds": total,
+                    "scripts": len(scripts), "outputs": len(outputs),
+                    "rendered": sum(s.get("status") == "rendered" for s in scripts)})
+    return out
+
+
+@app.get("/api/info")
+def info():
+    cfg = config.load()
+    return {"tts": cfg["tts"]["engine"], "llm": cfg["llm"]["model"],
+            "llm_ready": bool(config.secret(cfg["llm"]["api_key_env"])),
+            "gpu_mode": cfg.get("gpu", {}).get("mode", "local"),
+            "min_seconds": cfg.get("script", {}).get("min_seconds", 25),
+            "max_seconds": cfg.get("script", {}).get("max_seconds", 45)}
+
+
+def _clip_durations(batch: str) -> dict:
+    """素材时长缓存（只读容器头，很快）。"""
+    import av
+
+    cache = config.data_root() / "clipinfo" / f"{batch}.json"
+    data = json.loads(cache.read_text(encoding="utf-8")) if cache.exists() else {}
+    changed = False
+    for c in media.list_clips(_batch_dir(batch)):
+        if c.name not in data:
+            with av.open(str(c)) as f:
+                data[c.name] = round(f.duration / 1_000_000, 2) if f.duration else 0
+            changed = True
+    if changed:
+        cache.parent.mkdir(parents=True, exist_ok=True)
+        cache.write_text(json.dumps(data, ensure_ascii=False), encoding="utf-8")
+    return data
+
+
+@app.get("/api/batches/{batch}/clips")
+def clips(batch: str):
+    durs = _clip_durations(batch)
+    tdir = _transcript_dir(batch)
+    out = []
+    for c in media.list_clips(_batch_dir(batch)):
+        f = tdir / f"{c.stem}.json"
+        item = {"clip": c.name, "duration": durs.get(c.name, 0), "transcribed": f.exists(), "lang": {}, "sentences": 0}
+        if f.exists():
+            t = json.loads(f.read_text(encoding="utf-8"))
+            item["sentences"] = len(t["sentences"])
+            item["lang"] = asr.lang_stats([t])
+            item["preview_text"] = "".join(s["text"] for s in t["sentences"][:4])[:60]
+        out.append(item)
+    return out
+
+
+@app.get("/api/batches/{batch}/transcripts/{clip}")
+def clip_transcript(batch: str, clip: str):
+    f = _transcript_dir(batch) / f"{Path(clip).stem}.json"
+    if not f.exists():
+        raise HTTPException(404, "这条素材还没识别")
+    return json.loads(f.read_text(encoding="utf-8"))
+
+
+@app.get("/api/thumb")
+def thumb(batch: str, clip: str, t: float = 1.0):
+    """素材缩略图（竖屏 270×480，有缓存）。"""
+    src = _batch_dir(batch) / clip
+    if not src.exists() or "/" in clip or "\\" in clip:
+        raise HTTPException(404)
+    out = config.data_root() / "thumbs" / batch / f"{src.stem}_{t:.1f}.jpg"
+    if not out.exists():
+        out.parent.mkdir(parents=True, exist_ok=True)
+        media.run_ffmpeg(["-ss", f"{max(0.0, t):.2f}", "-i", str(src), "-frames:v", "1",
+                          "-vf", "scale=270:480:force_original_aspect_ratio=increase,crop=270:480", "-q:v", "4", str(out)])
+    return FileResponse(out, media_type="image/jpeg")
+
+
+@app.get("/api/output_thumb/{batch}/{sid}.jpg")
+def output_thumb(batch: str, sid: str):
+    src = config.data_root() / "outputs" / batch / f"{sid}.mp4"
+    if not src.exists():
+        raise HTTPException(404)
+    out = config.data_root() / "thumbs" / batch / f"out_{sid}_{int(src.stat().st_mtime)}.jpg"
+    if not out.exists():
+        out.parent.mkdir(parents=True, exist_ok=True)
+        media.run_ffmpeg(["-ss", "1.5", "-i", str(src), "-frames:v", "1", "-vf", "scale=270:480", "-q:v", "4", str(out)])
+    return FileResponse(out, media_type="image/jpeg")
+
+
+@app.get("/api/batches/{batch}/transcripts")
+def transcripts(batch: str):
+    ts = _load_transcripts(batch)
+    return {"stats": asr.lang_stats(ts), "transcripts": ts}
+
+
+@app.post("/api/batches/{batch}/transcribe")
+def transcribe(batch: str):
+    folder = _batch_dir(batch)
+    job = jobs.submit("transcribe", f"{batch} 语音识别",
+                      lambda p: asr.lang_stats(asr.transcribe_folder(folder, _transcript_dir(batch), p)))
+    return job.to_dict()
+
+
+@app.post("/api/batches/{batch}/generate")
+def generate(batch: str):
+    folder = _batch_dir(batch)
+
+    def run(p):
+        ts = asr.transcribe_folder(folder, _transcript_dir(batch), p)
+        p(0, 1, "大模型出剪辑脚本中")
+        scripts = scriptmod.generate(batch, ts, p)
+        scriptmod.archive_batch(batch)   # 旧脚本和旧成片挪去 _old_时间 目录，不删除
+        for s in scripts:
+            scriptmod.save(s)
+        p(1, 1, f"已生成 {len(scripts)} 条剪辑脚本，等你审核")
+        return [s["id"] for s in scripts]
+
+    return jobs.submit("generate", f"{batch} 识别并出脚本", run).to_dict()
+
+
+# ---------------- 剪辑脚本 ----------------
+
+@app.get("/api/batches/{batch}/scripts")
+def scripts(batch: str):
+    res = []
+    for s in scriptmod.list_scripts(batch):
+        out = config.data_root() / "outputs" / batch / f"{s['id']}.mp4"
+        res.append({**s, "duration": round(scriptmod.total_duration(s), 1),
+                    "resolved_voice": scriptmod.resolved_voice_mode(s), "has_output": out.exists()})
+    return res
+
+
+@app.put("/api/batches/{batch}/scripts/{sid}")
+def save_script(batch: str, sid: str, data: dict = Body(...)):
+    if data.get("id") != sid or data.get("batch") != batch:
+        raise HTTPException(400, "脚本编号不匹配")
+    scriptmod.save(data)
+    return {"ok": True}
+
+
+@app.delete("/api/batches/{batch}/scripts/{sid}")
+def delete_script(batch: str, sid: str):
+    p = scriptmod.scripts_dir(batch) / f"{sid}.json"
+    if p.exists():
+        p.unlink()
+    return {"ok": True}
+
+
+@app.post("/api/batches/{batch}/scripts/{sid}/render")
+def render_script(batch: str, sid: str):
+    s = scriptmod.load(batch, sid)
+
+    def run(p):
+        out = render.render(s, p)
+        s2 = scriptmod.load(batch, sid)
+        s2["status"] = "rendered"
+        scriptmod.save(s2)
+        return str(out)
+
+    return jobs.submit("render", f"{sid} 出片", run).to_dict()
+
+
+@app.post("/api/batches/{batch}/render_all")
+def render_all(batch: str):
+    """把这一批还没出片的脚本全部排队出片。"""
+    queued = []
+    for s in scriptmod.list_scripts(batch):
+        if s.get("status") == "rendered":
+            continue
+        s["status"] = "approved"
+        scriptmod.save(s)
+        queued.append(render_script(batch, s["id"]))
+    return queued
+
+
+@app.get("/api/preview_clip")
+def preview_clip(batch: str, clip: str, start: float, end: float):
+    """审核时看原片：把这句话在原素材里的片段转成小尺寸 MP4（有缓存）。"""
+    src = _batch_dir(batch) / clip
+    if not src.exists() or "/" in clip or "\\" in clip:
+        raise HTTPException(404)
+    s, e = max(0.0, start - 0.3), end + 0.3
+    out = config.data_root() / "preview" / batch / f"{src.stem}_{s:.2f}_{e:.2f}.mp4"
+    if not out.exists():
+        out.parent.mkdir(parents=True, exist_ok=True)
+        media.run_ffmpeg(["-ss", f"{s:.3f}", "-t", f"{e - s:.3f}", "-i", str(src),
+                          "-vf", "scale=540:-2,fps=30", "-c:v", "libx264", "-preset", "veryfast", "-crf", "26",
+                          "-c:a", "aac", "-b:a", "96k", "-movflags", "+faststart", str(out)])
+    return FileResponse(out, media_type="video/mp4")
+
+
+@app.post("/api/batches/{batch}/auto")
+def auto(batch: str):
+    """一键直接出片：识别 → 大模型出脚本 → 全部出片，中间不停下来审核。"""
+    folder = _batch_dir(batch)
+
+    def run(p):
+        ts = asr.transcribe_folder(folder, _transcript_dir(batch), lambda i, n, m: p(i, n * 3, f"识别 {m}"))
+        p(1, 3, "大模型出剪辑脚本中")
+        scripts = scriptmod.generate(batch, ts)
+        scriptmod.archive_batch(batch)
+        for s in scripts:
+            s["status"] = "approved"
+            scriptmod.save(s)
+        outs = []
+        for i, s in enumerate(scripts):
+            def sub(j, n, m, i=i):
+                p(2 * len(scripts) + i * 1 + (j / n if n else 0), 3 * len(scripts), f"第 {i + 1}/{len(scripts)} 条：{m}")
+            outs.append(str(render.render(s, sub)))
+            s2 = scriptmod.load(batch, s["id"])
+            s2["status"] = "rendered"
+            scriptmod.save(s2)
+        p(1, 1, f"完成，共出 {len(outs)} 条成片")
+        return outs
+
+    return jobs.submit("auto", f"{batch} 一键出片", run).to_dict()
+
+
+@app.get("/api/outputs/{batch}/{sid}.mp4")
+def output(batch: str, sid: str):
+    f = config.data_root() / "outputs" / batch / f"{sid}.mp4"
+    if not f.exists():
+        raise HTTPException(404)
+    return FileResponse(f, media_type="video/mp4", filename=f"{sid}.mp4")
+
+
+# ---------------- 配音试听 ----------------
+
+@app.post("/api/tts/preview")
+def tts_preview(data: dict = Body(...)):
+    text = (data.get("text") or "").strip()
+    if not text:
+        raise HTTPException(400, "没有文字")
+    engine = data.get("engine") or None
+    ref = None
+    if data.get("batch") and data.get("script_id"):
+        # 试听也用这条视频的老板原声做参考，和出片一致
+        from jh import voice
+
+        s = scriptmod.load(data["batch"], data["script_id"])
+        s.update({k: data[k] for k in ("voice_source", "voice_ref") if k in data})
+        ref = voice.reference_for(s)
+    ref_lang = (s.get("voice_ref") or {}).get("lang") if ref else None
+    job = jobs.submit("tts", f"试听：{text[:12]}", lambda p: str(tts.synthesize(text, engine, ref, ref_lang)))
+    return job.to_dict()
+
+
+@app.get("/api/batches/{batch}/scripts/{sid}/voice_ref")
+def get_voice_ref(batch: str, sid: str):
+    """这条视频用来克隆老板声音的原声片段，以及可以换的其他候选。"""
+    from jh import voice
+
+    s = scriptmod.load(batch, sid)
+    cands = voice.ranked(s)
+    current = s.get("voice_ref") or (cands[0] if cands else None)
+    return {"current": current, "candidates": cands}
+
+
+@app.get("/api/voice_ref_file")
+def voice_ref_file(batch: str, clip: str, start: float, end: float):
+    from jh import voice
+
+    if "/" in clip or "\\" in clip or not (_batch_dir(batch) / clip).exists():
+        raise HTTPException(404)
+    f = voice.extract(batch, {"clip": clip, "start": start, "end": end})
+    return FileResponse(f, media_type="audio/wav")
+
+
+@app.get("/api/tts/engines")
+def tts_engines():
+    """配音引擎列表和状态（页面上选择引擎用）。"""
+    from jh import ming_engine
+
+    cfg = config.load()["tts"]
+    cv_dir = Path(config.load()["paths"]["cosyvoice_repo"]) / cfg["cosyvoice3"]["model_dir"]
+    cv_ok = (cv_dir / "llm.pt").exists() and (cv_dir / "flow.pt").exists()
+    ming = ming_engine.status()
+    return {
+        "default": cfg["engine"],
+        "engines": [
+            {"id": "ming", "name": "Ming-3.0 粤语", "available": ming["available"], "running": ming["running"],
+             "note": "工作台自动启动，约占 2–3GB 显存" if ming["available"] else ming["message"]},
+            {"id": "cosyvoice3", "name": "CosyVoice3", "available": cv_ok, "running": False,
+             "note": "本地模型" if cv_ok else "模型还在下载"},
+            {"id": "azure", "name": "Azure 粤语", "available": bool(config.secret(cfg["azure"]["api_key_env"])),
+             "running": False, "note": "需要在 secrets.yaml 填 Key"},
+        ],
+    }
+
+
+@app.get("/api/tts/file")
+def tts_file(path: str):
+    f = Path(path).resolve()
+    if config.data_root().resolve() not in f.parents or not f.exists():
+        raise HTTPException(404)
+    return FileResponse(f, media_type="audio/wav")
+
+
+# ---------------- 任务 ----------------
+
+@app.get("/api/jobs")
+def job_list():
+    return jobs.list()
+
+
+@app.get("/api/jobs/{jid}")
+def job(jid: str):
+    j = jobs.jobs.get(jid)
+    if not j:
+        raise HTTPException(404)
+    return j.to_dict()
+
+
+# ---------------- 产品图生视频（AutoDL 云端） ----------------
+
+@app.get("/api/cloud/status")
+def cloud_status():
+    from jh import cloud
+
+    try:
+        cloud.ensure_tunnel()
+    except Exception as e:  # noqa: BLE001
+        return {"connected": False, "error": str(e)}
+    return cloud.status()
+
+
+@app.get("/api/tvc")
+def tvc_list():
+    from jh import tvc
+
+    return tvc.list_projects()
+
+
+@app.post("/api/tvc")
+def tvc_create(data: dict = Body(...)):
+    """新建项目：image 是 dataURL/base64，brief 是产品名、品牌、卖点、要求。"""
+    from jh import tvc
+
+    brief = {k: str(data.get(k) or "").strip() for k in ("product", "brand", "selling_points", "notes")}
+    if not brief["product"]:
+        raise HTTPException(400, "请填写产品名称")
+    if not data.get("image"):
+        raise HTTPException(400, "请上传产品图")
+    p = tvc.create(data["image"], data.get("filename") or "product.png", brief)
+    until = data.get("until")
+    job = None
+    if until in ("keyframes", "final"):
+        job = jobs.submit("tvc", f"{brief['product'][:10]} {'出分镜' if until == 'keyframes' else '一键出片'}",
+                          lambda pr: tvc.run(p["id"], until, pr)["id"]).to_dict()
+    return {"project": p, "job": job}
+
+
+@app.get("/api/tvc/{pid}")
+def tvc_get(pid: str):
+    from jh import tvc
+
+    try:
+        return tvc.load(pid)
+    except (FileNotFoundError, ValueError):
+        raise HTTPException(404, "找不到项目")
+
+
+@app.put("/api/tvc/{pid}/plan")
+def tvc_save_plan(pid: str, data: dict = Body(...)):
+    """保存改过的提示词。改了关键帧提示词的，那张关键帧和相关视频段标记为需要重做。"""
+    from jh import tvc
+
+    p = tvc.load(pid)
+    old = p.get("plan") or {}
+    for i, k in enumerate(data.get("keyframes", [])):
+        if i < len(old.get("keyframes", [])) and k.get("image_prompt") != old["keyframes"][i].get("image_prompt"):
+            p["keyframes"][i]["status"] = "stale" if p["keyframes"][i].get("file") else "pending"
+    for i, s in enumerate(data.get("segments", [])):
+        if i < len(old.get("segments", [])) and s.get("video_prompt") != old["segments"][i].get("video_prompt"):
+            p["segments"][i]["status"] = "stale" if p["segments"][i].get("file") else "pending"
+    p["plan"] = data
+    return tvc.save(p)
+
+
+@app.post("/api/tvc/{pid}/run")
+def tvc_run(pid: str, data: dict = Body(default={})):
+    from jh import tvc
+
+    p = tvc.load(pid)
+    until = data.get("until", "final")
+    return jobs.submit("tvc", f"{p['brief']['product'][:10]} {'出分镜' if until == 'keyframes' else '出片'}",
+                       lambda pr: tvc.run(pid, until, pr)["id"]).to_dict()
+
+
+@app.post("/api/tvc/{pid}/replan")
+def tvc_replan(pid: str):
+    from jh import tvc
+
+    def run(pr):
+        p = tvc.load(pid)
+        if not p.get("caption"):
+            p = tvc.analyze(p, pr)
+        return tvc.plan(p, pr)["id"]
+
+    return jobs.submit("tvc", "重新出方案", run).to_dict()
+
+
+@app.post("/api/tvc/{pid}/keyframes/{k}")
+def tvc_keyframe(pid: str, k: int):
+    from jh import tvc
+
+    return jobs.submit("tvc", f"重画关键帧 {k}", lambda pr: tvc.keyframe(tvc.load(pid), k, new_seed=True)["id"]).to_dict()
+
+
+@app.post("/api/tvc/{pid}/segments/{s}")
+def tvc_segment(pid: str, s: int):
+    from jh import tvc
+
+    return jobs.submit("tvc", f"重做视频段 {s}",
+                       lambda pr: tvc.segment(tvc.load(pid), s, new_seed=True, progress=pr)["id"]).to_dict()
+
+
+@app.post("/api/tvc/{pid}/compose")
+def tvc_compose(pid: str):
+    from jh import tvc
+
+    return jobs.submit("tvc", "合成成片", lambda pr: tvc.compose(tvc.load(pid), pr)["id"]).to_dict()
+
+
+@app.get("/api/tvc/{pid}/file/{name}")
+def tvc_file(pid: str, name: str):
+    from jh import tvc
+
+    f = (tvc.pdir(pid) / name).resolve()
+    if tvc.pdir(pid).resolve() not in f.parents or not f.is_file():
+        raise HTTPException(404)
+    media_type = {".mp4": "video/mp4", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
+                  ".webp": "image/webp"}.get(f.suffix.lower())
+    return FileResponse(f, media_type=media_type)
+
+
+
+if __name__ == "__main__":
+    uvicorn.run(app, host="127.0.0.1", port=8765)
