@@ -1,6 +1,7 @@
 """Generate AutoDL paths without changing the tracked desktop configuration."""
 import sys
 import subprocess
+import hashlib
 from pathlib import Path
 
 import yaml
@@ -29,12 +30,16 @@ def make(source: Path, base: Path, output: Path) -> None:
         return value
 
     cfg = fix(cfg)
+    subprocess.run(["bash", str(source / "deploy/autodl/install_nvenc_compat.sh"), str(base)],
+                   check=True, timeout=60)
+    digest = hashlib.sha256((source / "deploy/autodl/nvenc-compat/nvenc_fix.c").read_bytes()).hexdigest()[:20]
+    ffmpeg = str(base / "engines/nvenc-compat" / digest / "ffmpeg")
     cfg["paths"].update(material_root=str(base / "materials"), data_root=str(base / "data"),
-                        output_root=str(base / "outputs"), ffmpeg="/usr/bin/ffmpeg", cosyvoice_repo="")
+                        output_root=str(base / "outputs"), ffmpeg=ffmpeg, cosyvoice_repo="")
     cfg["asr"]["device"] = "cuda:0"
     # Test an actual session: a listed encoder does not prove a vGPU permits it.
     probe = subprocess.run([
-        "/usr/bin/ffmpeg", "-nostdin", "-hide_banner", "-loglevel", "error",
+        ffmpeg, "-hide_banner", "-loglevel", "error",
         "-f", "lavfi", "-i", "color=size=640x360:rate=1", "-frames:v", "1",
         "-c:v", "h264_nvenc", "-f", "null", "-",
     ], capture_output=True, timeout=20)
