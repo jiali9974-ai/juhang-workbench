@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react"
-import { AudioLines, Bot, ChevronRight, Clapperboard, Cpu, FolderOpen, HardDrive, Loader2, Plus, Sparkles } from "lucide-react"
+import { AudioLines, Bot, ChevronRight, Clapperboard, FolderOpen, HardDrive, Loader2, Plus } from "lucide-react"
 import { AnimatePresence, motion } from "motion/react"
 import { toast } from "sonner"
 
@@ -33,8 +33,6 @@ import { useJobs } from "@/hooks/use-jobs"
 import { go, href, type Route } from "@/hooks/use-route"
 import { api, type Batch, type Gpu, type Info, type TtsEngine } from "@/lib/api"
 import { minutes } from "@/lib/format"
-import { FEATURES } from "@/lib/features"
-import { tvcApi, tvcFile, type TvcSummary } from "@/lib/tvc"
 import { cn } from "@/lib/utils"
 
 function GpuCard({ gpu, busy }: { gpu: Gpu | null; busy: boolean }) {
@@ -71,7 +69,6 @@ function MiniProgress({ parts }: { parts: number[] }) {
   )
 }
 
-const TVC_STAGE: Record<string, string> = { created: "待开始", analyzed: "已识别", planned: "方案已出", keyframes: "分镜待审核", done: "已出片" }
 
 /** 可展开的一条主线：标题行 + 下拉的项目列表 */
 function NavSection(props: {
@@ -147,9 +144,9 @@ function NewButton({ label, onClick }: { label: string; onClick: () => void }) {
 
 function loadOpen(): Record<string, boolean> {
   try {
-    return JSON.parse(localStorage.getItem("jh.nav.open") || "") || { tvc: true, clips: true }
+    return JSON.parse(localStorage.getItem("jh.nav.open") || "") || { clips: true }
   } catch {
-    return { tvc: true, clips: true }
+    return { clips: true }
   }
 }
 
@@ -158,7 +155,6 @@ export function AppSidebar({ route }: { route: Route }) {
   const [gpu, setGpu] = useState<Gpu | null>(null)
   const [info, setInfo] = useState<Info | null>(null)
   const [batches, setBatches] = useState<Batch[]>([])
-  const [tvcs, setTvcs] = useState<TvcSummary[]>([])
   const [engine, setEngine] = useState<TtsEngine | null>(null)
   const [open, setOpen] = useState<Record<string, boolean>>(loadOpen)
   const [newBatch, setNewBatch] = useState<{ show: boolean; name: string; folder: string; busy: boolean }>({ show: false, name: "", folder: "", busy: false })
@@ -182,20 +178,17 @@ export function AppSidebar({ route }: { route: Route }) {
   }, [])
   useEffect(() => {
     api.batches().then(setBatches).catch(() => {})
-    if (FEATURES.productVideo) tvcApi.list().then(setTvcs).catch(() => {})
   }, [version, route])
   useEffect(() => {
     // 上传、加载文件夹完成后页面会发这个事件，侧边栏跟着刷新素材数量
     const on = () => {
       api.batches().then(setBatches).catch(() => {})
-      if (FEATURES.productVideo) tvcApi.list().then(setTvcs).catch(() => {})
     }
     window.addEventListener("jh:refresh", on)
     return () => window.removeEventListener("jh:refresh", on)
   }, [])
 
   const curBatch = route.page === "batch" || route.page === "script" ? route.batch : null
-  const curTvc = route.page === "tvc-project" ? route.id : null
   const toggle = (k: string) => setOpen((o) => ({ ...o, [k]: !o[k] }))
 
   async function createBatch() {
@@ -251,38 +244,7 @@ export function AppSidebar({ route }: { route: Route }) {
           <SidebarGroupLabel>创作</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu className="gap-1.5">
-              {/* 主线一：产品图生视频（功能开关关着时不显示） */}
-              {FEATURES.productVideo && <NavSection
-                id="tvc"
-                icon={<Sparkles className="text-gold-ink" />}
-                title="产品图生视频"
-                badge={<span className="rounded-full bg-primary/15 px-1.5 text-[10px] text-gold-ink group-data-[collapsible=icon]:hidden">云端</span>}
-                active={route.page === "tvc" || route.page === "tvc-project"}
-                open={!!open.tvc}
-                onToggle={() => toggle("tvc")}
-                onHome={() => go({ page: "tvc" })}
-                count={tvcs.length}
-              >
-                <NewButton label="新建项目" onClick={() => go({ page: "tvc" })} />
-                {tvcs.length === 0 && <div className="px-2 py-1.5 text-xs text-muted-foreground">还没有项目</div>}
-                {tvcs.map((t) => (
-                  <SubItem key={t.id} layoutKey="nav-active" active={curTvc === t.id} onClick={() => go({ page: "tvc-project", id: t.id })}
-                    action={<DeleteProject kind="tvc" id={t.id} name={t.title} icon current={curTvc === t.id} />}>
-                    <span className="flex items-center gap-2">
-                      <span className="size-7 shrink-0 overflow-hidden rounded bg-muted bg-cover bg-center" style={{ backgroundImage: t.cover ? `url('${tvcFile(t.id, t.cover)}')` : undefined }} />
-                      <span className="min-w-0 flex-1 pr-5">
-                        <span className="block truncate text-[13px] font-medium">{t.title}</span>
-                        <span className="flex items-center gap-1 text-[11px] text-muted-foreground">
-                          {active.some((j) => j.kind === "tvc" && j.result === null) && curTvc === t.id && <Loader2 className="size-3 animate-spin" />}
-                          {TVC_STAGE[t.stage] ?? t.stage}
-                        </span>
-                      </span>
-                    </span>
-                  </SubItem>
-                ))}
-              </NavSection>}
-
-              {/* 主线二：视频素材剪辑 */}
+              {/* 视频素材剪辑 */}
               <NavSection
                 id="clips"
                 icon={<Clapperboard className="text-gold-ink" />}
@@ -323,7 +285,6 @@ export function AppSidebar({ route }: { route: Route }) {
           <div className="flex items-center gap-2"><AudioLines className="size-3.5" />配音 <b className="ml-auto flex items-center gap-1.5 font-medium text-foreground/80">{engine && <span className={cn("size-1.5 rounded-full", engine.running ? "bg-ok" : engine.available ? "bg-primary" : "bg-muted-foreground/40")} title={engine.running ? "运行中" : engine.note} />}{engine?.name ?? info?.tts ?? "-"}</b></div>
           <div className="flex items-center gap-2"><Bot className="size-3.5" />智能体 <b className="ml-auto font-medium text-foreground/80">{info?.llm ?? "-"}</b>{info && !info.llm_ready && <span className="text-warn">未填 Key</span>}</div>
           <div className="flex items-center gap-2"><HardDrive className="size-3.5" />素材和成片都在本机</div>
-          {FEATURES.productVideo && <div className="flex items-center gap-2"><Cpu className="size-3.5" />产品图生视频在 AutoDL 云端</div>}
         </div>
       </SidebarFooter>
       <SidebarRail />
@@ -349,7 +310,7 @@ export function AppSidebar({ route }: { route: Route }) {
               value={newBatch.folder}
               onChange={(e) => setNewBatch((s) => ({ ...s, folder: e.target.value }))}
               onKeyDown={(e) => e.key === "Enter" && createBatch()}
-              placeholder="例如：D:\巨航\素材\素材\9.29"
+              placeholder={"例如：D:\\巨航\\素材\\素材\\9.29"}
               className="font-mono text-xs"
             />
           </label>

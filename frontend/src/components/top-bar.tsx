@@ -12,10 +12,6 @@ export function TopBar({ route }: { route: Route }) {
     if (route.page === "batch" && route.tab === "clips") crumbs.push({ label: "素材库" })
     if (route.page === "script") crumbs.push({ label: `审核 ${route.id}` })
   }
-  if (route.page === "tvc" || route.page === "tvc-project") {
-    crumbs.push({ label: "产品图生视频", to: href({ page: "tvc" }) })
-    if (route.page === "tvc-project") crumbs.push({ label: route.id })
-  }
   return (
     <header className="sticky top-0 z-20 flex h-12 shrink-0 items-center gap-2 border-b bg-background/80 px-4 backdrop-blur">
       <SidebarTrigger className="-ml-1 text-muted-foreground" />

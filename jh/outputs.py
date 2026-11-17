@@ -76,19 +76,40 @@ def delete_output(batch: str, sid: str, active_jobs: list[dict] | None = None) -
         script_path.write_text(json.dumps(script, ensure_ascii=False, indent=1), encoding="utf-8")
 
 
+def _export_filename(title: str, sid: str) -> str:
+    """使用成片库标题命名，替换 Windows 文件名不支持的字符。"""
+    name = re.sub(r'[<>:"/\\|?*\x00-\x1f]', "_", title).strip(" .")
+    if name.lower().endswith(".mp4"):
+        name = name[:-4].rstrip(" .")
+    name = name or sid
+    if re.fullmatch(r"CON|PRN|AUX|NUL|COM[1-9]|LPT[1-9]", name.split(".")[0], re.IGNORECASE):
+        name = "_" + name
+    # 留出扩展名和重名序号的空间；按 UTF-8 字节截断，中文文件名也能正常解压。
+    return name.encode("utf-8")[:220].decode("utf-8", errors="ignore").rstrip(" .")
+
+
 def export_outputs(items: list[tuple[str, str]], active_jobs: list[dict] | None = None) -> str:
     if not items:
         raise ValueError("请先选择成片")
     selected = list(dict.fromkeys(items))
-    available = {(item["batch"], item["id"]) for item in list_outputs(active_jobs)}
+    available = {(item["batch"], item["id"]): item for item in list_outputs(active_jobs)}
     files = []
+    used_names: set[str] = set()
     for batch, sid in selected:
         path = output_path(batch, sid)
         if not path.is_file():
             raise FileNotFoundError(f"成片不存在：{sid}")
         if (batch, sid) not in available:
             raise ValueError(f"成片尚未完成：{sid}")
-        files.append((path, f"{batch}/{sid}.mp4" if batch else f"{sid}.mp4"))
+        stem = _export_filename(available[batch, sid]["title"], sid)
+        prefix = f"{batch}/" if batch else ""
+        name = f"{prefix}{stem}.mp4"
+        number = 2
+        while name.casefold() in used_names:
+            name = f"{prefix}{stem} ({number}).mp4"
+            number += 1
+        used_names.add(name.casefold())
+        files.append((path, name))
     token = uuid.uuid4().hex
     dest = export_path(token)
     dest.parent.mkdir(parents=True, exist_ok=True)

@@ -98,7 +98,7 @@ export function ProjectsPage() {
 
   const header = (
     <div className="mb-8">
-      <h1 className={PAGE_TITLE}>项目</h1>
+      <h1 className={PAGE_TITLE}>素材</h1>
     </div>
   )
 

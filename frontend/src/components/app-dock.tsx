@@ -1,4 +1,4 @@
-// 底部居中的导航：成片 / 项目 / 美颜设置 / 流程图
+// 底部居中的导航：成片 / 素材 / 美颜设置 / 流程图
 import { Film, FolderOpen, Wand2, Workflow } from "lucide-react"
 import { motion } from "motion/react"
 
@@ -20,7 +20,7 @@ export function AppDock({ route }: { route: Route }) {
     },
     {
       key: "projects",
-      label: "项目",
+      label: "素材",
       icon: FolderOpen,
       active: route.page === "projects" || route.page === "batch" || route.page === "script",
       onClick: () => go({ page: "projects" }),

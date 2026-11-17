@@ -16,7 +16,7 @@ asr:
   vad_dir: "D:/jhwb/models/fsmn-vad"
 
 llm:
-  # 智能体（写剪辑脚本、产品广告方案）用的大模型：OpenAI 兼容接口，走中转站
+  # 智能体（写剪辑脚本）用的大模型：OpenAI 兼容接口，走中转站
   base_url: "https://api.jialisite.top/v1"
   model: "gpt-6.1-sol"
   fallback_models: ["gpt-6", "gpt-5.6"]   # 主模型连续失败时依次换这些
@@ -76,8 +76,8 @@ tts:
 
 render:
   slip_trim: "audio"                      # 口误怎么处理：audio = 只删声音（换成底噪）；cut = 画面一起剪；超过 1 秒无人声时两种模式都会裁画面
-  segment_gap: {first_lead: 0.02, lead: 0.02, tail: 0.02, final_tail: 0.1}   # 普通切点前后各留 0.02 秒；成片最后一个字后留 0.1 秒
-  silence_cut: {threshold: 1.0}            # 段内超过 1 秒无人声时同步裁掉音画，中间切点仍前后各留 0.02 秒
+  segment_gap: {first_lead: 0.02, lead: 0.05, tail: 0.05, final_tail: 0.5}   # 片头留 0.02 秒，普通切点前后各留 0.05 秒，片尾留 0.5 秒
+  silence_cut: {threshold: 1.0}            # 段内超过 1 秒无人声时同步裁掉音画，中间切点前后各留 0.05 秒
   width: 1440
   height: 2560
   fps: 60
@@ -163,42 +163,3 @@ dub:                                      # 整条视频转粤语（不剪辑，
   demucs_model: "htdemucs"
   # 原视频烧进去的普通话字幕位置（画面比例 x, y, 宽, 高），这块会模糊掉，粤语字幕正好压在上面；没有旧字幕就写 []
   cover_old_subtitles: [0.14, 0.733, 0.72, 0.045]
-
-cloud:                                    # AutoDL 云端 ComfyUI（产品图生视频用）
-  ssh_host: "jh-autodl"                   # ~/.ssh/config 里的主机别名，用专用密钥登录
-  remote_port: 8188                       # 云端 ComfyUI 端口
-  local_port: 18188                       # 本机隧道端口
-
-tvc:                                      # 产品图生视频
-  width: 768                              # H3 / 关键帧尺寸（9:16，32 的倍数，约 1M 像素）
-  height: 1344
-  seconds_per_segment: 5                  # 每段视频秒数（H3 首尾帧，5 秒 = 124 帧）
-  segments: 3                             # 段数（15 秒 = 3 段 × 5 秒，关键帧 = 段数 + 1）
-  qwen:
-    unet: "qwen_image_2.1_int8_convrot.safetensors"
-    clip: "qwen3vl_8b_int8_convrot.safetensors"
-    vae: "qwen_image_2.1_vae_bf16.safetensors"
-    steps: 25
-    cfg: 1.0
-  h3:
-    unet: "minimax_h3_fl2va_pruned_int8_convrot.safetensors"
-    clip: "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"          # RTX 50 系（Blackwell）用 NVFP4，省显存
-    clip_other_gpu: "qwen3vl_32b_minimax_h3_int8_convrot.safetensors"   # 3090/4090 等不支持 NVFP4 的卡自动换这个
-    video_vae: "minimax_h3_video_vae_fp16.safetensors"
-    audio_vae: "minimax_h3_audio_vae_fp32.safetensors"
-    turbo_lora: "minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors"
-    use_turbo: true                       # 8 步加速；关掉则 20 步，更慢更细
-    steps_turbo: 8
-    steps_full: 20
-  caption_clip: "qwen3vl_8b_int8_convrot.safetensors"   # 识别产品用的 Qwen3-VL
-  default_style: "presenter"              # presenter = 口播带货（照参考作品）；typography = 产品贴字 TVC
-  presenter:                              # 口播带货：虚拟主播出镜 + 手持特写 + 粤语配音字幕
-    shots: 6                              # 镜头数（5–7）：主播开场 → 手持特写 → 主播收尾
-    min_seconds: 3.0                      # 每个镜头最短 / 最长秒数（按配音长度自动定）
-    max_seconds: 7.0
-    line_gap: 0.12                        # 同一镜头里两句配音之间的停顿
-    same_last_frame: true                 # 关键帧同时当首帧和尾帧：动作只能回到原位，手表不会越转越变形
-    speak_lines: true                     # 主播镜头让 H3 里的人真的说这句粤语台词（之后换成 Ming 配音），口型和配音对得上
-    voice_lufs: -16                       # 成片配音响度（两遍标准化，不抽动）
-    ambience_db: -18                      # H3 生成的店内环境声（去掉人声）比配音低多少 dB 垫在下面；写 null 就不垫
-    portrait_prompt: "手机竖屏实拍的半身画面，像抖音口播视频的截图。一位三十多岁的华人男士，短黑发，干净利落，穿浅灰色亚麻衬衫，站在名表店的玻璃柜台前，面对镜头自然微笑，双手放在身前，自然光，背景轻微虚化，真实皮肤质感。画面中不要出现任何文字、字幕、水印。"

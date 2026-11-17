@@ -18,7 +18,7 @@ class SpeechTimingTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.cfg = copy.deepcopy(config.load())
         self.cfg["render"].update(width=90, height=160, fps=60, encoder="libx264",
-                                  segment_gap={"first_lead": .02, "lead": .02, "tail": .02, "final_tail": .1},
+                                  segment_gap={"first_lead": .02, "lead": .05, "tail": .05, "final_tail": .5},
                                   silence_cut={"threshold": 1.0})
         for target, value in [("load", lambda: self.cfg), ("data_root", lambda: self.root)]:
             replacement = patch.object(config, target, value)
@@ -26,26 +26,28 @@ class SpeechTimingTests(unittest.TestCase):
             self.addCleanup(replacement.stop)
 
     def test_only_gaps_strictly_greater_than_one_second_are_cut(self):
-        self.assertEqual(speech_timing.retained_ranges([(.2, .8), (1.8, 2.4)], 3), [(.18, 2.42)])
-        self.assertEqual(speech_timing.retained_ranges([(.2, .8), (1.801, 2.4)], 3), [(.18, .82), (1.781, 2.42)])
+        self.assertEqual(speech_timing.retained_ranges([(.2, .8), (1.8, 2.4)], 3), [(.15, 2.45)])
+        self.assertEqual(speech_timing.retained_ranges([(.2, .8), (1.801, 2.4)], 3), [(.15, .85), (1.751, 2.45)])
         self.assertEqual(speech_timing.retained_ranges([(.2, .8), (1.2, 1.5), (2.6, 3)], 4),
-                         [(.18, 1.52), (2.58, 3.02)])
+                         [(.15, 1.55), (2.55, 3.05)])
 
     def test_unsorted_overlapping_voice_regions_do_not_create_false_cuts(self):
-        self.assertEqual(speech_timing.retained_ranges([(1, 2), (.2, 1.2), (.4, .3)], 3), [(.18, 2.02)])
+        self.assertEqual(speech_timing.retained_ranges([(1, 2), (.2, 1.2), (.4, .3)], 3), [(.15, 2.05)])
         self.assertEqual(speech_timing.retained_ranges([], 3), [(0, 3)])
 
     def test_first_lead_does_not_change_padding_at_internal_cuts(self):
-        self.assertEqual(speech_timing.retained_ranges([(.2, .8), (2, 2.5)], 3, first_lead=.05),
-                         [(.15, .82), (1.98, 2.52)])
+        self.assertEqual(speech_timing.retained_ranges([(.2, .8), (2, 2.5)], 3, first_lead=.02),
+                         [(.18, .85), (1.95, 2.55)])
 
-    def test_only_the_final_segment_has_one_tenth_second_after_speech(self):
+    def test_only_the_final_segment_has_half_a_second_after_speech(self):
         segs = [render.Segment(self.root / "a.mp4", 10, 2), render.Segment(self.root / "b.mp4", 20, 2)]
         with patch.object(render, "_clip_audio", return_value=np.ones((96000, 2), np.float32)), \
              patch.object(speech_timing, "detect", return_value=[(.1, 1.5)]):
             result = render.apply_speech_timing(segs)
-        self.assertAlmostEqual(result[0].v_start + result[0].v_dur, 11.52)
-        self.assertAlmostEqual(result[1].v_start + result[1].v_dur, 21.6)
+        self.assertAlmostEqual(result[0].v_start, 10.08)
+        self.assertAlmostEqual(result[1].v_start, 20.05)
+        self.assertAlmostEqual(result[0].v_start + result[0].v_dur, 11.55)
+        self.assertAlmostEqual(result[1].v_start + result[1].v_dur, 22.0)
 
     def test_split_moves_video_audio_and_subtitles_together(self):
         seg = render.Segment(self.root / "video.mp4", 10, 3, tts_wav=self.root / "voice.wav", a_start=5,
@@ -54,10 +56,10 @@ class SpeechTimingTests(unittest.TestCase):
              patch.object(speech_timing, "detect", return_value=[(.2, .8), (2.01, 2.6)]):
             first, last = render.apply_speech_timing([seg])
         audio.assert_called_once_with(seg.tts_wav, 5, 3)
-        self.assertEqual((first.v_start, first.a_start, first.v_dur), (10.18, 5.18, .64))
-        self.assertEqual((last.v_start, last.a_start, last.v_dur), (11.99, 6.99, .71))
+        self.assertEqual((first.v_start, first.a_start, first.v_dur), (10.18, 5.18, .67))
+        self.assertEqual((last.v_start, last.a_start, last.v_dur), (11.96, 6.96, 1.14))
         self.assertEqual(first.subs, [(.02, .62, "第一句")])
-        self.assertEqual(last.subs, [(.02, .61, "第二句")])
+        self.assertEqual(last.subs, [(.05, .64, "第二句")])
         self.assertEqual(last.zoom, 1.2)
         self.assertEqual(seg.a_start, 5)  # 原计划不被原地改写。
 
@@ -67,12 +69,47 @@ class SpeechTimingTests(unittest.TestCase):
         self.assertAlmostEqual(render.keep_pieces(line, words)[-1][1], 1.82)
         self.assertAlmostEqual(render.keep_pieces(line, words, final=True)[-1][1], 2.52)
 
+    def test_previous_sentence_tail_cannot_restore_a_deleted_restart(self):
+        previous = {"clip": "a.mov", "start": .3, "end": .9, "keep": "高",
+                    "words": [["高", .3, .8], ["。", .8, .9]]}
+        retry = {"clip": "a.mov", "start": .9, "end": 3, "keep": "这只表",
+                 "words": [["这", .9, 1.3], ["只", 1.3, 1.5], ["表", 1.5, 1.7],
+                           ["是", 1.7, 2], ["，", 2, 2.1], ["这", 2.1, 2.5],
+                           ["只", 2.5, 2.7], ["表", 2.7, 3]]}
+        script = {"batch": "test", "lines": [previous, retry]}
+        first, last = render._script_keep_pieces(script)
+        self.assertEqual(first[1][-1][1], .8)  # 旧的 .12 秒句尾余量会带入下一句错误的“这”。
+        self.assertEqual(last[1][0][0], 2.1)  # 即使口误中间有标点，也不能回取已删的字。
+        retry["clip"] = "b.mov"
+        self.assertEqual(render._script_keep_pieces(script)[0][1][-1][1], .92)
+
+    def test_next_sentence_lead_cannot_restore_a_deleted_suffix(self):
+        previous = {"clip": "a.mov", "start": 0, "end": 1, "keep": "很好",
+                    "words": [["很", 0, .3], ["好", .3, .6], ["这", .6, .9], ["，", .9, 1]]}
+        following = {"clip": "a.mov", "start": 1, "end": 1.8, "keep": "这只表",
+                     "words": [["这", 1, 1.3], ["只", 1.3, 1.5], ["表", 1.5, 1.8]]}
+        first, last = render._script_keep_pieces({"batch": "test", "lines": [previous, following]})
+        self.assertEqual(first[1][-1][1], .6)
+        self.assertEqual(last[1][0][0], 1)
+
+    def test_audio_fades_never_leak_deleted_speech_outside_retained_intervals(self):
+        sr = render.AUDIO_SR
+        with patch.object(render, "_clip_audio", return_value=np.ones((sr, 2), np.float32)), \
+             patch.object(render, "room_tone", return_value=np.zeros((sr, 2), np.float32)):
+            wav = render.clean_audio("test", self.root / "source.mov", 0, 1, [(.2, .4)])
+        audio, _ = sf.read(wav)
+        self.assertEqual(float(np.max(np.abs(audio[:round(.2 * sr)]))), 0)
+        self.assertEqual(float(np.max(np.abs(audio[round(.4 * sr):]))), 0)
+        self.assertLess(abs(float(audio[round(.2 * sr), 0])), .01)  # 边界从零起淡入，避免硬截产生爆音。
+        self.assertLess(abs(float(audio[round(.4 * sr) - 1, 0])), .01)
+        self.assertGreater(float(np.mean(audio[round(.22 * sr):round(.38 * sr)])), .99)
+
     def test_extended_final_padding_does_not_import_the_next_unselected_word(self):
         seg = render.Segment(self.root / "video.mp4", 10, 1)
         with patch.object(render, "_clip_audio", return_value=np.ones((48000, 2), np.float32)), \
              patch.object(speech_timing, "detect", return_value=[(.02, 1)]):
             last = render.apply_speech_timing([seg])[0]
-        self.assertEqual(last.v_dur, 1.1)
+        self.assertEqual(last.v_dur, 1.5)
         self.assertEqual(last.a_dur, 1)
 
     def test_detector_bounds_its_output_and_reuses_audio_analysis(self):
@@ -101,13 +138,13 @@ class SpeechTimingTests(unittest.TestCase):
             parts = render.apply_speech_timing([seg])
         out = self.root / "last.mp4"
         render.encode_segment(parts[-1], out, look.normalize({"enabled": False}))
-        self.assertAlmostEqual(media.probe(out).duration, .71, delta=1 / 60 + .002)
+        self.assertAlmostEqual(media.probe(out).duration, 1.14, delta=1 / 60 + .002)
         audio = render._clip_audio(out).mean(axis=1)
         section = audio[round(.12 * sr):round(.4 * sr)]
         frequencies = np.fft.rfftfreq(len(section), 1 / sr)
         peak = frequencies[np.argmax(np.abs(np.fft.rfft(section)))]
         self.assertAlmostEqual(peak, 880, delta=10)  # 错用音轨开头会变成 440 Hz。
-        self.assertLess(float(np.sqrt(np.mean(audio[-round(.06 * sr):] ** 2))), .005)
+        self.assertLess(float(np.sqrt(np.mean(audio[-round(.45 * sr):] ** 2))), .005)
 
 
 if __name__ == "__main__":

@@ -29,13 +29,13 @@ class OutputApiTests(unittest.TestCase):
         self.addCleanup(self.output_patch.stop)
         self.client = TestClient(server.app)
 
-    def video(self, batch, sid, status="rendered", content=b"completed-video"):
+    def video(self, batch, sid, status="rendered", content=b"completed-video", title=None):
         folder = self.root / "outputs" / batch
         folder.mkdir(parents=True, exist_ok=True)
         (folder / f"{sid}.mp4").write_bytes(content)
         script = self.root / "scripts" / batch / f"{sid}.json"
         script.parent.mkdir(parents=True, exist_ok=True)
-        script.write_text(json.dumps({"id": sid, "batch": batch, "title": sid, "status": status}), encoding="utf-8")
+        script.write_text(json.dumps({"id": sid, "batch": batch, "title": sid if title is None else title, "status": status}), encoding="utf-8")
 
     def test_configured_output_directory_and_top_level_files_are_the_library(self):
         library = self.root / "independent-outputs"
@@ -83,8 +83,8 @@ class OutputApiTests(unittest.TestCase):
         self.assertEqual({(v["batch"], v["id"]) for v in response.json()}, {("项目甲", "第一条"), ("项目乙", "第二条")})
 
     def test_selected_zip_keeps_unicode_names_and_cleans_up_after_download(self):
-        self.video("项目甲", "同名", content=b"A")
-        self.video("项目乙", "同名", content=b"B")
+        self.video("项目甲", "同名", content=b"A", title="杭州上城区二手名表店")
+        self.video("项目乙", "同名", content=b"B", title="劳力士218239白金款")
         self.video("项目甲", "未选择", content=b"excluded")
         selection = [{"batch": batch, "id": "同名"} for batch in ("项目甲", "项目乙", "项目甲")]
         response = self.client.post("/api/outputs/export", json={"items": selection})
@@ -94,10 +94,45 @@ class OutputApiTests(unittest.TestCase):
         self.assertEqual(download.status_code, 200)
         self.assertEqual(download.headers["content-type"], "application/zip")
         with zipfile.ZipFile(io.BytesIO(download.content)) as archive:
-            self.assertEqual(archive.namelist(), ["项目甲/同名.mp4", "项目乙/同名.mp4"])
-            self.assertEqual(archive.read("项目甲/同名.mp4"), b"A")
-            self.assertEqual(archive.read("项目乙/同名.mp4"), b"B")
+            self.assertEqual(archive.namelist(), ["项目甲/杭州上城区二手名表店.mp4", "项目乙/劳力士218239白金款.mp4"])
+            self.assertEqual(archive.read("项目甲/杭州上城区二手名表店.mp4"), b"A")
+            self.assertEqual(archive.read("项目乙/劳力士218239白金款.mp4"), b"B")
+        self.assertTrue((self.root / "outputs" / "项目甲" / "同名.mp4").is_file())
         self.assertEqual(self.client.get(url).status_code, 404)
+
+    def test_export_disambiguates_titles_without_overwriting_any_selected_video(self):
+        titles = ["名表行情", "名表行情 (2)", "名表行情", "Watch", "watch", "名表行情"]
+        selected = []
+        for index, title in enumerate(titles):
+            batch = "项目乙" if index == 5 else "项目甲"
+            sid = f"片_{index}"
+            self.video(batch, sid, title=title, content=str(index).encode())
+            selected.append({"batch": batch, "id": sid})
+        response = self.client.post("/api/outputs/export", json={"items": selected})
+        self.assertEqual(response.status_code, 200)
+        with zipfile.ZipFile(io.BytesIO(self.client.get(response.json()["url"]).content)) as archive:
+            names = ["项目甲/名表行情.mp4", "项目甲/名表行情 (2).mp4", "项目甲/名表行情 (3).mp4",
+                     "项目甲/Watch.mp4", "项目甲/watch (2).mp4", "项目乙/名表行情.mp4"]
+            self.assertEqual(archive.namelist(), names)
+            self.assertEqual([archive.read(name) for name in names], [str(i).encode() for i in range(6)])
+
+    def test_export_titles_are_safe_to_extract_and_fall_back_to_the_id(self):
+        titles = [" ../名表/行情:新低? ", "CON", "", "   ", "成片" * 100, "带扩展名.mp4"]
+        selected = []
+        for index, title in enumerate(titles):
+            sid = f"片_{index}"
+            self.video("项目", sid, title=title)
+            selected.append({"batch": "项目", "id": sid})
+        response = self.client.post("/api/outputs/export", json={"items": selected})
+        self.assertEqual(response.status_code, 200)
+        with zipfile.ZipFile(io.BytesIO(self.client.get(response.json()["url"]).content)) as archive:
+            names = archive.namelist()
+            self.assertEqual(names[:4], ["项目/_名表_行情_新低_.mp4", "项目/_CON.mp4", "项目/片_2.mp4", "项目/片_3.mp4"])
+            self.assertEqual(names[-1], "项目/带扩展名.mp4")
+            self.assertTrue(all(len(name.split("/")[-1].encode("utf-8")) <= 255 for name in names))
+            destination = self.root / "extracted"
+            archive.extractall(destination)
+            self.assertEqual(len(list(destination.rglob("*.mp4"))), len(selected))
 
     def test_export_rejects_empty_missing_unfinished_and_escaping_paths(self):
         self.video("项目甲", "制作中", "approved")
@@ -186,20 +221,18 @@ class OutputApiTests(unittest.TestCase):
             self.assertEqual(self.client.delete("/api/batches/项目甲").status_code, 409)
         self.assertEqual(source.read_bytes(), b"keep-busy")
 
-    def test_delete_product_project_permanently_and_leave_other_projects(self):
-        project = self.root / "tvc" / "product-1" / "segments"
-        project.mkdir(parents=True)
-        (project / "video.mp4").write_bytes(b"delete")
-        other = self.root / "tvc" / "product-2"
-        other.mkdir()
-        (other / "product.png").write_bytes(b"keep")
-        result = self.client.delete("/api/tvc/product-1")
-        self.assertEqual(result.status_code, 200)
-        self.assertEqual(result.json(), {"ok": True})
-        self.assertFalse(project.parent.exists())
-        self.assertEqual((other / "product.png").read_bytes(), b"keep")
-        self.assertFalse((self.root / "_recycle").exists())
-        self.assertEqual(self.client.delete("/api/tvc/product-1").status_code, 404)
+    def test_removed_image_generation_routes_are_unavailable_and_preserve_existing_files(self):
+        stored = self.root / "tvc" / "existing-project" / "product.png"
+        stored.parent.mkdir(parents=True)
+        stored.write_bytes(b"existing-user-data")
+        for method, url in [("GET", "/api/cloud/status"), ("GET", "/api/tvc"),
+                            ("POST", "/api/tvc"), ("GET", "/api/tvc_presenter"),
+                            ("DELETE", "/api/tvc/existing-project")]:
+            with self.subTest(method=method, url=url):
+                self.assertEqual(self.client.request(method, url, json={}).status_code, 404)
+        self.assertEqual(stored.read_bytes(), b"existing-user-data")
+        paths = self.client.get("/openapi.json").json()["paths"]
+        self.assertFalse(any(path.startswith(("/api/tvc", "/api/cloud/")) for path in paths))
 
     def test_invalid_delete_target_is_rejected_before_any_files_are_deleted(self):
         target = self.root / "keep"

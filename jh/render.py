@@ -68,10 +68,8 @@ def line_words(batch: str, l: dict) -> list | None:
     return l["words"]
 
 
-def keep_pieces(l: dict, words: list | None, *, final: bool = False) -> list[tuple[float, float]]:
-    """这句原话真正要用的时间段（素材里的秒数）：去掉 keep 里删掉的口误、句首句尾的犹豫声，压缩长停顿和拖长的字。"""
-    if not words:
-        return [(max(0.0, l["start"] - 0.08), l["end"] + 0.12)]
+def _kept_word_indices(l: dict, words: list) -> list[int]:
+    """从后往前对齐保留原话，返回真正保留的非标点字。"""
     import difflib
 
     chars, owner = [], []                  # 每个（非标点）字属于哪个 word
@@ -105,8 +103,18 @@ def keep_pieces(l: dict, words: list | None, *, final: bool = False) -> list[tup
         kept[real.pop(0)] = False
     while real and scriptmod._bare(words[real[-1]][0]) in HESITATION:
         kept[real.pop()] = False
+    return real
+
+
+def keep_pieces(l: dict, words: list | None, *, final: bool = False,
+                trim_lead: bool = False, trim_tail: bool = False) -> list[tuple[float, float]]:
+    """这句原话真正要用的时间段；口误旁边的余量只能补底噪，不能取回已删除的原声。"""
+    if not words:
+        return [(max(0.0, l["start"] - (0 if trim_lead else 0.08)), l["end"] + (0 if trim_tail else 0.12))]
+    real = _kept_word_indices(l, words)
     if not real:
         return []
+    kept = set(real)
     first, last = real[0], real[-1]
     pieces: list[list[float]] = []
     for i in range(first, last + 1):
@@ -114,17 +122,16 @@ def keep_pieces(l: dict, words: list | None, *, final: bool = False) -> list[tup
         if _is_punct(w):
             # 句子中间的停顿：前后的字都保留时才算停顿，超过 MAX_PAUSE 就压到 KEEP_PAUSE
             nxt_real = next((j for j in range(i + 1, last + 1) if not _is_punct(words[j][0])), None)
-            if pieces and i > 0 and kept[i - 1] and nxt_real is not None and kept[nxt_real]:
+            if pieces and i - 1 in kept and nxt_real in kept:
                 pieces.append([a, a + (KEEP_PAUSE if b - a > MAX_PAUSE else b - a)])
             continue
-        if not kept[i]:
+        if i not in kept:
             continue
-        # 片尾最后一个字保留完整尾音，不能先按拖音规则截短，再补 0.1 秒。
+        # 片尾最后一个字保留完整尾音，不能先按拖音规则截短，再补片尾留白。
         pieces.append([a, b if final and i == last else a + (KEEP_CHAR if b - a > MAX_CHAR else b - a)])
-    # 头尾留一点余量：挨着被剪掉的字时只留一点点，免得带进口误的声音
-    lead = 0.03 if first > 0 and not _is_punct(words[first - 1][0]) else 0.08
-    nxt = last + 1
-    tail = 0.03 if nxt < len(words) and not _is_punct(words[nxt][0]) else 0.12
+    # 不能越过已删字的边界（包括隔着标点的口误）。正常切点的留白由后续人声裁剪补足。
+    lead = 0 if trim_lead or any(not _is_punct(w[0]) for w in words[:first]) else 0.08
+    tail = 0 if trim_tail or any(not _is_punct(w[0]) for w in words[last + 1:]) else 0.12
     pieces[0][0] = max(0.0, pieces[0][0] - lead)
     pieces[-1][1] = pieces[-1][1] + tail
     merged: list[list[float]] = []
@@ -134,6 +141,26 @@ def keep_pieces(l: dict, words: list | None, *, final: bool = False) -> list[tup
         else:
             merged.append([a, b])
     return [(round(a, 3), round(b, 3)) for a, b in merged if b - a >= 0.06]
+
+
+def _script_keep_pieces(script: dict) -> list[tuple[dict, list[tuple[float, float]]]]:
+    """相邻句子一起检查：下一句删掉重说的开头时，上一句尾部也不能带回那段口误。"""
+    lines = script["lines"]
+    words = [line_words(script["batch"], l) for l in lines]
+    deleted_edges = []
+    for l, ws in zip(lines, words):
+        real = _kept_word_indices(l, ws) if ws else []
+        first, last = (real[0], real[-1]) if real else (len(ws or []), -1)
+        deleted_edges.append((any(not _is_punct(w[0]) for w in (ws or [])[:first]),
+                              any(not _is_punct(w[0]) for w in (ws or [])[last + 1:])))
+
+    def adjacent(left: dict, right: dict) -> bool:
+        return left["clip"] == right["clip"] and -0.01 <= right["start"] - left["end"] <= 0.35
+
+    return [(l, keep_pieces(l, ws, final=i == len(lines) - 1,
+                           trim_lead=i > 0 and adjacent(lines[i - 1], l) and deleted_edges[i - 1][1],
+                           trim_tail=i + 1 < len(lines) and adjacent(l, lines[i + 1]) and deleted_edges[i + 1][0]))
+            for i, (l, ws) in enumerate(zip(lines, words))]
 
 
 # ---------------- 字幕切分 ----------------
@@ -240,6 +267,7 @@ def plan(script: dict, progress=None) -> list[Segment]:
         # 超过阈值的无人声停顿在分段规划完成后统一同步裁掉音画。
         if scriptmod.fill_keep(script) and script.get("id"):
             scriptmod.save(script)
+        pieces_by_line = {id(l): pieces for l, pieces in _script_keep_pieces(script)}
         group: list[dict] = []
         groups: list[list[dict]] = []
         for l in script["lines"]:
@@ -257,13 +285,13 @@ def plan(script: dict, progress=None) -> list[Segment]:
             v1 = g[-1]["end"] + 0.12
             keep_iv: list[tuple[float, float]] = []
             for l in g:
-                keep_iv += keep_pieces(l, line_words(script["batch"], l), final=l is script["lines"][-1])
+                keep_iv += pieces_by_line[id(l)]
             if keep_iv:
-                # 片段之间的间隔（config render.segment_gap）：上一段说完最后一个字留 0.02 秒、下一段开口前留 0.02 秒；
+                # 片段之间的间隔（config render.segment_gap）：上一段说完最后一个字留 0.05 秒、下一段开口前留 0.05 秒；
                 # 成片第一段开口前也只留 0.02 秒，开头第一幕直接说话。开口、说完的位置按声音判断（识别给的时间常差 0.2–0.7 秒）
                 gap = cfg["render"].get("segment_gap") or {}
-                lead = float(gap.get("first_lead", 0.02)) if gi == 0 else float(gap.get("lead", 0.02))
-                tail = float(gap.get("final_tail", 0.1) if gi == len(groups) - 1 else gap.get("tail", 0.02))
+                lead = float(gap.get("first_lead", 0.02)) if gi == 0 else float(gap.get("lead", 0.05))
+                tail = float(gap.get("final_tail", 0.5) if gi == len(groups) - 1 else gap.get("tail", 0.05))
                 v0, v1 = tighten(material / g[0]["clip"], keep_iv[0][0], keep_iv[-1][1], lead, tail)
             seg = Segment(clip=material / g[0]["clip"], v_start=v0, v_dur=v1 - v0, zoom=g[0].get("zoom"))
             seg.tts_wav = clean_audio(script["batch"], seg.clip, v0, v1 - v0, keep_iv)
@@ -277,8 +305,8 @@ def plan(script: dict, progress=None) -> list[Segment]:
         if scriptmod.fill_keep(script) and script.get("id"):
             scriptmod.save(script)
         flat: list[tuple[dict, float, float]] = []          # (句子, 素材起点, 素材终点)
-        for l in script["lines"]:
-            for a, b in keep_pieces(l, line_words(script["batch"], l), final=l is script["lines"][-1]):
+        for l, pieces in _script_keep_pieces(script):
+            for a, b in pieces:
                 flat.append((l, a, b))
         if flat:                                            # 开头第一幕直接从第一个字开口的地方开始
             l, a, b = flat[0]
@@ -350,7 +378,7 @@ def apply_speech_timing(segs: list[Segment], progress=None) -> list[Segment]:
     cfg = config.load()["render"]
     gap = cfg.get("segment_gap") or {}
     threshold = float((cfg.get("silence_cut") or {}).get("threshold", 1.0))
-    lead, tail = float(gap.get("lead", .02)), float(gap.get("tail", .02))
+    lead, tail = float(gap.get("lead", .05)), float(gap.get("tail", .05))
     result = []
     for index, seg in enumerate(segs):
         if progress:
@@ -359,10 +387,10 @@ def apply_speech_timing(segs: list[Segment], progress=None) -> list[Segment]:
         audio = _clip_audio(source, start, seg.v_dur)
         voices = speech_timing.detect(audio, AUDIO_SR)
         ranges = speech_timing.retained_ranges(voices, seg.v_dur, threshold=threshold, lead=lead, tail=tail,
-                                               first_lead=float(gap.get("first_lead", lead)) if index == 0 else lead)
+                                               first_lead=float(gap.get("first_lead", .02)) if index == 0 else lead)
         if voices and index == len(segs) - 1:
             a, _ = ranges[-1]
-            ranges[-1] = (a, round(max(b for _, b in voices) + float(gap.get("final_tail", .1)), 3))
+            ranges[-1] = (a, round(max(b for _, b in voices) + float(gap.get("final_tail", .5)), 3))
         for a, b in ranges:
             subs = [(round(max(a, x) - a, 3), round(min(b, y) - a, 3), text)
                     for x, y, text in seg.subs if min(b, y) > max(a, x)]
@@ -501,7 +529,7 @@ def clean_audio(batch: str, clip: Path, v0: float, dur: float, keep_iv: list[tup
 
     import soundfile as sf
 
-    key = hashlib.md5(f"{clip.name}|{v0:.3f}|{dur:.3f}|{keep_iv}".encode()).hexdigest()[:12]
+    key = hashlib.md5(f"bounded-v3|{clip.name}|{v0:.3f}|{dur:.3f}|{keep_iv}".encode()).hexdigest()[:12]
     out = config.data_root() / "renders" / batch / "_audio" / f"{clip.stem}_{v0:.2f}_{key}.wav"
     if out.exists():
         return out
@@ -515,7 +543,8 @@ def clean_audio(batch: str, clip: Path, v0: float, dur: float, keep_iv: list[tup
     ramp = int(0.015 * AUDIO_SR)                            # 15 毫秒交叉淡化，换底噪的地方听不出接缝
     if ramp > 1:
         k = np.hanning(2 * ramp + 1).astype(np.float32)
-        mask = np.clip(np.convolve(mask, k / k.sum(), mode="same"), 0.0, 1.0)
+        # 淡化只发生在保留范围里面；向外卷积会把已删除的字头/尾重新混回来。
+        mask *= np.clip(2 * np.convolve(mask, k / k.sum(), mode="same") - 1, 0.0, 1.0)
     tone = room_tone(batch, clip, n / AUDIO_SR)[:n]
     mixed = y * mask[:, None] + tone * (1.0 - mask[:, None])
     out.parent.mkdir(parents=True, exist_ok=True)
@@ -711,7 +740,7 @@ def embed_cover(video: Path, cover_jpg: Path) -> None:
 def compose_segments(segs: list[Segment], work: Path, out: Path, progress=None,
                      cover: Path | None = None, settings: dict | None = None, on_stage=None) -> float:
     """逐段编码 → 拼接 → 烧字幕和角标（左上角竖排黄字、底部声明）、响度统一、混背景音乐 → 导出 out。返回总时长。
-    素材剪辑和产品图生视频（口播带货）共用这一套成片样式。"""
+    素材剪辑统一使用这一套成片样式。"""
     cfg = config.load()
     settings = look.current() if settings is None else settings
     work.mkdir(parents=True, exist_ok=True)

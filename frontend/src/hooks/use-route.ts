@@ -11,8 +11,6 @@ import { useEffect, useState } from "react"
 //   #/b/9.23/clips        项目详情 · 素材库
 //   #/b/9.23/dub          项目详情 · 整条转粤语的成片
 //   #/b/9.23/s/9.23_01    审核某条脚本
-//   #/tvc                 产品图生视频：项目列表 + 新建
-//   #/tvc/<项目号>        产品图生视频：项目详情
 export type BatchTab = "scripts" | "clips" | "dub"
 
 export type Route =
@@ -23,8 +21,6 @@ export type Route =
   | { page: "flow"; batch?: string; job?: string }
   | { page: "batch"; batch: string; tab: BatchTab }
   | { page: "script"; batch: string; id: string }
-  | { page: "tvc" }
-  | { page: "tvc-project"; id: string }
 
 let lastFlow: Extract<Route, { page: "flow" }> | null = null
 export const getLastFlow = () => lastFlow
@@ -40,7 +36,6 @@ function parse(hash: string): Route {
     if (parts[2] === "s" && parts[3]) return { page: "script", batch: parts[1], id: parts[3] }
     return { page: "batch", batch: parts[1], tab: parts[2] === "clips" ? "clips" : parts[2] === "dub" ? "dub" : "scripts" }
   }
-  if (parts[0] === "tvc") return parts[1] ? { page: "tvc-project", id: parts[1] } : { page: "tvc" }
   return { page: "home" }
 }
 
@@ -52,8 +47,6 @@ export function href(r: Route): string {
   if (r.page === "beauty") return r.batch ? `#/beauty/${e(r.batch)}` : "#/beauty"
   if (r.page === "batch") return `#/b/${e(r.batch)}${r.tab === "scripts" ? "" : `/${r.tab}`}`
   if (r.page === "script") return `#/b/${e(r.batch)}/s/${e(r.id)}`
-  if (r.page === "tvc") return "#/tvc"
-  if (r.page === "tvc-project") return `#/tvc/${e(r.id)}`
   return "#/"
 }
 

@@ -1,5 +1,36 @@
 # 云端自动同步
 
+## AutoDL 素材剪辑服务器
+
+新实例使用 `deploy/autodl/`，源码仓库仍为 `jiali9974-ai/juhang-workbench` 的 `main`。
+每 30 秒通过仓库专用只读 deploy key 拉取一次；本地代码必须提交并推送后才会更新。
+服务器地址由 AutoDL 控制台提供，SSH 密码不进入代码或 Git。
+
+- 数据盘根目录：`/root/autodl-tmp/jh-workbench`，下文简称 `$BASE`。
+- `materials/`、`outputs/`、`data/`、`models/`、`secrets.yaml` 独立于源码版本。
+- `source.git/` 和 `releases/<提交>/` 保存 Git 源码；`current` 指向当前运行版本。
+- Python 环境按 `deploy/autodl/requirements.txt` 内容分别缓存；前端依赖按 lockfile 缓存。
+- 先安装依赖、构建前端、生成 Linux 配置和检查后端导入，再等待剪辑队列空闲后切换。
+- 新版首页和接口检查失败时，恢复上一版源码、配置和 Python 环境。
+- GPU 用于 SenseVoice 识别和 NVENC 编码，默认保留素材原声；不安装图生视频模型。
+- 服务监听 `6006`，通过控制台「自定义服务」访问。
+- 后台进程由独立 Supervisor 管理，`/etc/autodl.sh` 调用 `automation/start.sh` 开机启动。
+- `automation/` 是已安装的部署基础设施；更新部署器本身后需单独安装，应用自动更新不自行替换部署器。
+
+```bash
+BASE=/root/autodl-tmp/jh-workbench
+cat "$BASE/deployed-revision"
+/root/miniconda3/bin/python -m supervisor.supervisorctl -c "$BASE/automation/supervisord.conf" status
+tail -n 60 "$BASE/logs/sync.log" "$BASE/logs/sync-error.log"
+# 手动检查更新；后台已在执行时会自动跳过
+/root/miniconda3/bin/python "$BASE/automation/sync.py"
+```
+
+回退：先停 `jh-git-sync`，将 `current` 指向 `runtime/` 中上一版目录，再重启 `jh-workbench`。
+修复或回退 GitHub `main` 后，再启动 `jh-git-sync`。
+
+## 旧 CPU 服务器
+
 源码以 `jiali9974-ai/juhang-workbench` 的 `main` 为准。提交并推送后，GitHub 的
 `push` webhook 立即触发拉取；systemd timer 每 30 秒补查一次，漏掉通知或临时断网后也会继续同步。
 前端需要构建，通常在推送后几十秒完成；有识别、剪辑或生成任务时，等任务结束后再切换。
