@@ -1,6 +1,6 @@
-// 流程图（思维导图）：工作台 → 两条流程 → 每一步，每一步上标着现在用的模型，点开直接改。
-import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react"
-import { ChevronDown, CircleAlert, Cpu, FlaskConical, Loader2, PencilLine, RefreshCw, X } from "lucide-react"
+// 剪辑流程：六个步骤横向排列，点开步骤查看配置、切换模型。
+import { useCallback, useEffect, useState } from "react"
+import { ArrowRight, ChevronDown, CircleAlert, Cpu, FlaskConical, Loader2, PencilLine, RefreshCw, X } from "lucide-react"
 import { AnimatePresence, motion } from "motion/react"
 import { toast } from "sonner"
 
@@ -8,7 +8,6 @@ import { ease } from "@/components/motion"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
-import { useIsMobile } from "@/hooks/use-mobile"
 import { api, type Pipeline, type PipelineField, type PipelineStep } from "@/lib/api"
 import { cn } from "@/lib/utils"
 
@@ -153,71 +152,44 @@ function FieldEditor({ f, busy, onSave, onRefreshModels }: {
   )
 }
 
-function StepCard({ id, index, step, open, onToggle, busyKey, onSave, onRefreshModels, nodeRef, className }: {
+function StepCard({ id, index, step, open, onToggle }: {
   id: string
-  className?: string
   index: number
   step: PipelineStep
   open: boolean
   onToggle: () => void
-  busyKey: string | null
-  onSave: (f: PipelineField, v: unknown) => void
-  onRefreshModels: () => Promise<void>
-  nodeRef: (el: HTMLElement | null) => void
 }) {
   const editable = step.fields.some((f) => f.key)
   return (
-    <div
-      ref={nodeRef}
-      data-node={id}
-      className={cn("w-[400px] rounded-xl border bg-background transition-colors", className, open ? "border-foreground shadow-[0_8px_30px_oklch(0_0_0/7%)]" : "hover:border-foreground/40", step.off && !open && "opacity-55")}
+    <button
+      id={`flow-step-${id}`}
+      aria-expanded={open}
+      aria-controls={open ? "flow-step-details" : undefined}
+      onClick={onToggle}
+      className={cn("h-full min-h-40 w-full rounded-xl border bg-background p-3.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring", open ? "border-foreground shadow-[0_8px_30px_oklch(0_0_0/7%)]" : "hover:border-foreground/40")}
     >
-      <button onClick={onToggle} className="flex w-full items-start gap-3 px-3.5 py-3 text-left">
-        <span className={cn("mt-0.5 grid size-6 shrink-0 place-items-center rounded-full text-[11px] font-medium tabular", open ? "bg-foreground text-background" : "bg-muted text-muted-foreground")}>
+      <span className="flex items-center justify-between gap-2">
+        <span className={cn("grid size-6 shrink-0 place-items-center rounded-full text-[11px] font-medium tabular", open ? "bg-foreground text-background" : "bg-muted text-muted-foreground")}>
           {index + 1}
         </span>
-        <span className="min-w-0 flex-1">
-          <span className="flex items-center gap-2 text-sm font-semibold">
-            {step.title}
-            {step.off && <span className="rounded-full bg-muted px-1.5 py-px text-[10px] font-normal text-muted-foreground">已关闭</span>}
-          </span>
-          <span className="mt-1.5 flex flex-wrap gap-1">
-            {chips(step).map((c, i) => (
-              <span key={i} className={cn("inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px]", i === 0 ? "bg-foreground/[0.07] font-medium text-foreground" : "bg-muted text-muted-foreground")}>
-                {i === 0 && <Cpu className="size-3" />}{c}
-              </span>
-            ))}
-          </span>
-        </span>
-        <span className="mt-0.5 flex shrink-0 items-center gap-1 text-[11px] text-muted-foreground">
+        <span className="flex shrink-0 items-center gap-1 text-[11px] text-muted-foreground">
           {editable && !open && "换模型"}
           <motion.span animate={{ rotate: open ? 180 : 0 }} transition={{ duration: 0.2 }}><ChevronDown className="size-4" /></motion.span>
         </span>
-      </button>
-      <AnimatePresence initial={false}>
-        {open && (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
-            animate={{ height: "auto", opacity: 1 }}
-            exit={{ height: 0, opacity: 0 }}
-            transition={{ duration: 0.3, ease }}
-            className="overflow-hidden"
-          >
-            <div className="grid gap-4 border-t px-3.5 pt-3 pb-4">
-              <p className="text-xs leading-relaxed text-muted-foreground">{step.desc}</p>
-              {step.fields.map((f, i) => (
-                <FieldEditor key={`${f.key ?? "info"}-${i}`} f={f} busy={!!busyKey && busyKey === f.key} onSave={(v) => onSave(f, v)} onRefreshModels={onRefreshModels} />
-              ))}
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
-    </div>
+      </span>
+      <span className="mt-3 block text-sm font-semibold">{step.title}</span>
+      <span className="mt-2 flex flex-wrap gap-1">
+        {chips(step).map((c, i) => (
+          <span key={i} title={c} className={cn("inline-flex min-w-0 max-w-full items-center gap-1 rounded-full px-2 py-0.5 text-[11px]", i === 0 ? "bg-foreground/[0.07] font-medium text-foreground" : "bg-muted text-muted-foreground")}>
+            {i === 0 && <Cpu className="size-3 shrink-0" />}<span className="truncate">{c}</span>
+          </span>
+        ))}
+      </span>
+    </button>
   )
 }
 
 export function FlowPage() {
-  const mobile = useIsMobile()
   const [p, setP] = useState<Pipeline | null>(null)
   const [error, setError] = useState<string | null>(null)
   const [open, setOpen] = useState<string | null>(null)
@@ -235,7 +207,7 @@ export function FlowPage() {
       const shown = f.type === "select" ? f.options.find((o) => o.value === v)?.label ?? String(v)
         : f.type === "toggle" ? (v ? "开" : "关")
         : Array.isArray(v) ? (v.join("、") || "无") : String(v)
-      toast.success(`已保存：${f.label} → ${shown}`, { description: "写进了 config.yaml，下一次生成开始生效" })
+      toast.success(`已保存：${f.label} → ${shown}`, { description: "下一次生成开始生效" })
     } catch (e) {
       toast.error("没有保存", { description: msg(e) })
     } finally {
@@ -253,52 +225,8 @@ export function FlowPage() {
     }
   }
 
-  // ---- 连线：量出每个节点的位置，用曲线把父节点右边连到子节点左边 ----
-  const box = useRef<HTMLDivElement>(null)
-  const nodes = useRef(new Map<string, HTMLElement>())
-  const refs = useRef(new Map<string, (el: HTMLElement | null) => void>())
-  const nodeRef = (id: string) => {
-    let r = refs.current.get(id)
-    if (!r) {
-      r = (el) => { if (el) nodes.current.set(id, el); else nodes.current.delete(id) }
-      refs.current.set(id, r)
-    }
-    return r
-  }
-  const edges = useMemo(() => (p ? [
-    ...p.branches.map((b) => ["root", b.id] as const),
-    ...p.branches.flatMap((b) => b.steps.map((s) => [b.id, `${b.id}/${s.id}`] as const)),
-  ] : []), [p])
-  const [paths, setPaths] = useState<{ id: string; d: string; on: boolean }[]>([])
-  const measure = useCallback(() => {
-    const c = box.current
-    if (!c) return
-    const cr = c.getBoundingClientRect()
-    const out: { id: string; d: string; on: boolean }[] = []
-    for (const [a, b] of edges) {
-      const ea = nodes.current.get(a)
-      const eb = nodes.current.get(b)
-      if (!ea || !eb) continue
-      const ra = ea.getBoundingClientRect()
-      const rb = eb.getBoundingClientRect()
-      const x1 = ra.right - cr.left
-      const y1 = ra.top + ra.height / 2 - cr.top
-      const x2 = rb.left - cr.left
-      const y2 = rb.top + Math.min(rb.height / 2, 30) - cr.top     // 展开的卡片连到标题那一行
-      const mx = (x1 + x2) / 2
-      out.push({ id: `${a}>${b}`, d: `M${x1},${y1} C${mx},${y1} ${mx},${y2} ${x2},${y2}`, on: b === open || (a === "root" && !!open?.startsWith(`${b}/`)) })
-    }
-    setPaths(out)
-  }, [edges, open])
-  useLayoutEffect(() => {
-    measure()
-    const c = box.current
-    if (!c) return
-    const ro = new ResizeObserver(measure)
-    ro.observe(c)
-    nodes.current.forEach((el) => ro.observe(el))
-    return () => ro.disconnect()
-  }, [measure, mobile, p])
+  const steps = p?.branches.find((b) => b.id === "clip")?.steps.filter((s) => s.id !== "tts") ?? []
+  const selected = steps.find((s) => s.id === open)
 
   if (error) {
     return (
@@ -317,83 +245,44 @@ export function FlowPage() {
       <span className="text-xs text-muted-foreground">流程图</span>
       <h1 className="mt-3 text-4xl font-bold tracking-tight md:text-5xl lg:text-6xl">剪辑流程</h1>
       <p className="mt-4 max-w-2xl text-sm leading-relaxed text-muted-foreground">
-        从上传素材到出片的每一步，以及每一步用的模型。点开一步就能换模型，改完自动写进 config.yaml，下一次生成开始生效。
-        识别模型和 Ming 模型要在没有任务在跑的时候换。
+        从上传素材到出片，点开步骤查看配置或切换模型。修改在下一次生成时生效，识别模型需在没有任务运行时更换。
       </p>
       {!p.llm_ready && (
         <p className="mt-3 flex items-center gap-1.5 text-sm text-destructive"><CircleAlert className="size-4" />还没有填大模型 API Key（secrets.yaml），出脚本会失败</p>
       )}
 
-      {mobile ? (
-        <div className="mt-8 grid gap-8">
-          {p.branches.map((b) => (
-            <section key={b.id}>
-              <div className="rounded-2xl border-2 border-foreground/80 px-4 py-3">
-                <div className="font-semibold">{b.title}</div>
-                <div className="mt-1 text-[11px] leading-relaxed text-muted-foreground">{b.desc}</div>
-              </div>
-              <div className="mt-3 ml-5 grid gap-2.5 border-l-2 border-foreground/15 pl-4">
-                {b.steps.map((s, i) => {
-                  const id = `${b.id}/${s.id}`
-                  return (
-                    <StepCard key={id} id={id} index={i} step={s} className="w-full" open={open === id}
-                      onToggle={() => setOpen((o) => (o === id ? null : id))} busyKey={busyKey} onSave={save}
-                      onRefreshModels={refreshModels} nodeRef={() => {}} />
-                  )
-                })}
-              </div>
-            </section>
+      <div role="region" aria-label="剪辑流程，可横向滚动" tabIndex={0} className="scrollbar-thin mt-10 overflow-x-auto rounded-xl pb-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
+        <ol className="flex min-w-[1120px] items-stretch gap-8 py-2">
+          {steps.map((s, i) => (
+            <li key={s.id} className="relative min-w-0 flex-1">
+              <StepCard id={s.id} index={i} step={s} open={open === s.id}
+                onToggle={() => setOpen((o) => (o === s.id ? null : s.id))} />
+              {i < steps.length - 1 && <ArrowRight aria-hidden="true" className="absolute top-20 -right-6 size-4 -translate-y-1/2 text-muted-foreground/50" />}
+            </li>
           ))}
-        </div>
-      ) : (
-      <div className="scrollbar-thin mt-10 overflow-x-auto pb-4">
-        <div ref={box} className="relative mx-auto flex w-max items-center gap-16 py-2 pr-2">
-          <svg className="pointer-events-none absolute inset-0 size-full overflow-visible" aria-hidden>
-            {paths.map((x) => (
-              <path key={x.id} d={x.d} fill="none" strokeWidth={x.on ? 2 : 1.5}
-                className={cn("transition-[stroke] duration-200", x.on ? "stroke-foreground" : "stroke-foreground/15")} />
-            ))}
-          </svg>
-
-          {/* 根 */}
-          <div ref={nodeRef("root")} className="relative rounded-2xl bg-foreground px-5 py-4 text-background shadow-lg">
-            <div className="text-[11px] opacity-60">JUHANG STUDIO</div>
-            <div className="mt-0.5 font-semibold whitespace-nowrap">{p.root}</div>
-          </div>
-
-          {/* 两条流程 */}
-          <div className="relative flex flex-col gap-12">
-            {p.branches.map((b) => (
-              <div key={b.id} className="flex items-center gap-16">
-                <div ref={nodeRef(b.id)} className="w-44 rounded-2xl border-2 border-foreground/80 bg-background px-4 py-3">
-                  <div className="font-semibold">{b.title}</div>
-                  <div className="mt-1 text-[11px] leading-relaxed text-muted-foreground">{b.desc}</div>
-                </div>
-                <div className="flex flex-col gap-2.5">
-                  {b.steps.map((s, i) => {
-                    const id = `${b.id}/${s.id}`
-                    return (
-                      <StepCard
-                        key={id}
-                        id={id}
-                        index={i}
-                        step={s}
-                        open={open === id}
-                        onToggle={() => setOpen((o) => (o === id ? null : id))}
-                        busyKey={busyKey}
-                        onSave={save}
-                        onRefreshModels={refreshModels}
-                        nodeRef={nodeRef(id)}
-                      />
-                    )
-                  })}
-                </div>
-              </div>
-            ))}
-          </div>
-        </div>
+        </ol>
       </div>
-      )}
+      <AnimatePresence mode="wait" initial={false}>
+        {selected && (
+          <motion.section key={selected.id} id="flow-step-details" aria-labelledby={`flow-step-${selected.id}`}
+            initial={{ height: 0, opacity: 0 }} animate={{ height: "auto", opacity: 1 }} exit={{ height: 0, opacity: 0 }}
+            transition={{ duration: 0.25, ease }} className="max-w-2xl overflow-hidden">
+            <div className="mt-4 rounded-xl border bg-background p-5">
+              <div className="flex items-center justify-between gap-3">
+                <h2 className="text-sm font-semibold">{selected.title}</h2>
+                <Button size="icon-sm" variant="ghost" aria-label={`收起${selected.title}配置`} onClick={() => setOpen(null)}><X /></Button>
+              </div>
+              <p className="mt-1 text-xs leading-relaxed text-muted-foreground">{selected.desc}</p>
+              <div className="mt-5 grid gap-4">
+                {selected.fields.map((f, i) => (
+                  <FieldEditor key={`${f.key ?? "info"}-${i}`} f={f} busy={busyKey === f.key && !!busyKey}
+                    onSave={(v) => save(f, v)} onRefreshModels={refreshModels} />
+                ))}
+              </div>
+            </div>
+          </motion.section>
+        )}
+      </AnimatePresence>
     </div>
   )
 }
