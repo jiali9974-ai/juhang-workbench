@@ -140,6 +140,11 @@ def describe() -> dict:
         _f("tts.ming.model", "Ming 模型文件", "select", t["ming"]["model"], _ming_models(t["ming"]["model"])),
     ]
     enc = _f("render.encoder", "视频编码", "select", r["encoder"], ENCODERS, f"{r['width']}×{r['height']} · {r['fps']}fps · {r['bitrate']}")
+    matting_dir = config.data_root() / ((r.get("cover") or {}).get("matting_model") or "models/BiRefNet-portrait")
+    matting_note = (
+        "模型文件已就绪；优先用于封面人像抠图，显卡不可用或加载失败时使用备用分割。"
+        if (matting_dir / "model.safetensors").exists() else "未找到模型权重，封面将使用备用人像分割。"
+    )
 
     clip = {
         "id": "clip", "title": "剪辑成片", "desc": "首页「开始生成」：识别 → 出脚本 → 出片",
@@ -155,7 +160,12 @@ def describe() -> dict:
             {"id": "look", "title": "美颜调色", "desc": "统一光线、磨皮、提亮；强度在「美颜设置」里调",
              "fields": [_info("人脸检测", "OpenCV Haar"), _info("人脸网格", "MediaPipe FaceMesh", "按老板肤色拉齐亮度和白平衡、局部磨皮")]},
             {"id": "cover", "title": "封面", "desc": "第一帧做封面：人像抠图 + 白描边 + 标题",
-             "fields": [_info("人像分割", "MediaPipe Selfie + Pose")]},
+             "fields": [
+                 _info("主抠图模型", matting_dir.name, matting_note),
+                 _info("身体与手部定位", "MediaPipe Pose + Hands", "限制抠图范围，只保留人物身体、手臂和手。"),
+                 _info("备用人像分割", "MediaPipe Selfie + Pose", "主抠图模型不可用时自动使用。"),
+                 _info("封面选帧", "MediaPipe FaceMesh", "检查人脸朝向、睁眼和表情，选取自然的封面画面。"),
+             ]},
             {"id": "render", "title": "出片", "desc": "裁切放大 → 拼接 → 字幕 → 响度统一 → 背景音乐", "fields": [enc]},
         ],
     }
