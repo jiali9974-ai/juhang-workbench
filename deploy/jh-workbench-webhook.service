@@ -1,0 +1,13 @@
+[Unit]
+Description=Authenticated GitHub webhook for JH workbench
+After=network.target
+
+[Service]
+User=ubuntu
+ExecStart=/srv/jh-workbench/venv/bin/python /srv/jh-workbench/automation/git_webhook.py
+Restart=on-failure
+RestartSec=3
+Environment=PYTHONUNBUFFERED=1
+
+[Install]
+WantedBy=multi-user.target

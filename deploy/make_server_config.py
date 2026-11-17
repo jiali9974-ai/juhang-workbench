@@ -5,12 +5,13 @@
 """
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import yaml
 
 BASE = Path("/srv/jh-workbench")
-APP = BASE / "app"
+APP = Path(os.environ.get("JH_APP", BASE / "app"))
 
 # 本机路径前缀 → 服务器路径（长的放前面先匹配）
 PREFIXES = [
@@ -43,7 +44,7 @@ def main() -> None:
     cfg["asr"]["device"] = "cpu"
     cfg["render"]["encoder"] = "libx264"
     cfg.setdefault("gpu", {})["mode"] = "cpu"
-    out = BASE / "config.server.yaml"
+    out = Path(os.environ.get("JH_SERVER_CONFIG", BASE / "config.server.yaml"))
     out.write_text("# 自动生成（deploy/make_server_config.py），不要手改；改本机 config.yaml 后重新部署\n"
                    + yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False), encoding="utf-8")
     print("wrote", out)

@@ -6,6 +6,9 @@
 
 ## 使用
 
+云端部署已改为自动跟随 GitHub `main`：推送触发更新，30 秒定时补查；详细机制、状态和回退方法见
+[`deploy/README.md`](deploy/README.md)。本地未提交、未推送的修改不会同步到云端。
+
 1. 第一次用：复制 `secrets.example.yaml` 为 `secrets.yaml`，填大模型 API Key（默认走 GPT 中转站，地址和模型在 `config.yaml` 的 `llm`）。
 2. 双击 `start.bat`，浏览器打开 http://127.0.0.1:8765
 3. 左边选拍摄批次（素材目录下按日期分的文件夹）→「一键识别并出脚本」。
