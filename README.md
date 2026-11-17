@@ -6,7 +6,7 @@
 
 ## 使用
 
-AutoDL 素材剪辑服务器使用 `deploy/autodl/`，每 30 秒检查 GitHub `main`，支持 GPU 识别、NVENC 出片、开机启动和更新失败回退。
+AutoDL 素材剪辑服务器使用 `deploy/autodl/`，每 30 秒检查 GitHub `main`，支持 GPU 识别、素材剪辑出片、开机启动和更新失败回退。
 云端部署自动跟随 GitHub `main`；详细机制、状态和回退方法见
 [`deploy/README.md`](deploy/README.md)。本地未提交、未推送的修改不会同步到云端。
 

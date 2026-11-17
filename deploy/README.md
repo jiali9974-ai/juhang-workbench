@@ -12,7 +12,9 @@
 - Python 环境按 `deploy/autodl/requirements.txt` 内容分别缓存；前端依赖按 lockfile 缓存。
 - 先安装依赖、构建前端、生成 Linux 配置和检查后端导入，再等待剪辑队列空闲后切换。
 - 新版首页和接口检查失败时，恢复上一版源码、配置和 Python 环境。
-- GPU 用于 SenseVoice 识别和 NVENC 编码，默认保留素材原声；不安装图生视频模型。
+- GPU 用于 SenseVoice 识别；每次部署实际测试 NVENC 编码会话，可用时自动启用。
+  此实例的 vGPU 实测不开放 NVENC，因此视频导出自动使用 CPU 的 libx264；换整卡后无需手改配置。
+  默认保留素材原声，不安装图生视频模型。
 - 服务监听 `6006`，通过控制台「自定义服务」访问。
 - 后台进程由独立 Supervisor 管理，`/etc/autodl.sh` 调用 `automation/start.sh` 开机启动。
 - `automation/` 是已安装的部署基础设施；更新部署器本身后需单独安装，应用自动更新不自行替换部署器。
