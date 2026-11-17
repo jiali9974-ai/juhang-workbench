@@ -9,6 +9,9 @@ secrets.yaml
 # 生成数据、模型、引擎（体积大，按 README 重新下载 / 生成）
 data/
 models/
+# 云端 release 使用指向共享数据目录的符号链接（同样不进入 Git）
+/data
+/models
 engines/
 third_party/
 
