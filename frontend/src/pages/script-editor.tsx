@@ -23,7 +23,8 @@ import { Textarea } from "@/components/ui/textarea"
 import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { useJobs } from "@/hooks/use-jobs"
-import { go } from "@/hooks/use-route"
+import { followTask, getRoute, go } from "@/hooks/use-route"
+import { useSessionState } from "@/hooks/use-session-state"
 import { api, urls, type Line, type Role, type Script, type TtsEngine, type VoiceMode, type VoiceRef } from "@/lib/api"
 import { lineDuration, resolvedVoice, ROLE, scriptDuration, shortClip, subtitleChars, subtitleTooLong, tsec, VOICE } from "@/lib/format"
 import { cn } from "@/lib/utils"
@@ -54,7 +55,7 @@ export function ScriptEditor({ batch, id }: { batch: string; id: string }) {
   const [current, setCurrent] = useState<string | null>(null)
   const [preview, setPreview] = useState<Preview>({ kind: "none" })
   const [outVer, setOutVer] = useState(() => Date.now())
-  const [ttsLoading, setTtsLoading] = useState<string | null>(null)
+  const [ttsLoading, setTtsLoading] = useSessionState<string | null>(`script.tts:${batch}:${id}`, null)
   const [engines, setEngines] = useState<{ default: string; engines: TtsEngine[] } | null>(null)
   useEffect(() => {
     api.ttsEngines().then(setEngines).catch(() => {})
@@ -195,14 +196,12 @@ export function ScriptEditor({ batch, id }: { batch: string; id: string }) {
   const lineOf = (k: string) => s.lines[keys.indexOf(k)]
 
   async function renderNow() {
+    const source = getRoute()
     await save("approved", true)
     const j = await api.render(batch, s.id)
     toast("已确认，加入出片队列")
-    watch(j, async () => {
-      toast.success(`${s.id} 出片完成`)
-      await load()
-      setPreview({ kind: "output" })
-    })
+    watch(j, () => toast.success(`${s.id} 出片完成`))
+    followTask(source, batch, j.id)
   }
 
   async function playTts(k: string) {
@@ -449,7 +448,7 @@ export function ScriptEditor({ batch, id }: { batch: string; id: string }) {
               </AlertDialogContent>
             </AlertDialog>
             <Button variant="outline" onClick={() => save()}><Save />保存<kbd className="ml-1 text-[10px] text-muted-foreground">Ctrl+S</kbd></Button>
-            <Button className="gold-gradient shine font-bold" onClick={renderNow} disabled={rendering}>
+            <Button className="font-bold" onClick={renderNow} disabled={rendering} aria-busy={rendering}>
               {rendering ? <Loader2 className="animate-spin" /> : <Wand2 />}确认并出片
             </Button>
           </motion.div>
@@ -599,12 +598,12 @@ function LineRow({ k, index, line: l, active, ttsLoading, onSelect, onChange, on
         </div>
         <div className="flex gap-1">
           <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); onSource() }}><Video />原片</Button>
-          <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); onTts() }} disabled={ttsLoading}>
+          <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); onTts() }} disabled={ttsLoading} aria-busy={ttsLoading}>
             {ttsLoading ? <Loader2 className="animate-spin" /> : <AudioLines />}配音
           </Button>
           <Button size="icon-sm" variant="ghost" title="上移（Alt+↑）" onClick={(e) => { e.stopPropagation(); onMove(-1) }}><ArrowUp /></Button>
           <Button size="icon-sm" variant="ghost" title="下移（Alt+↓）" onClick={(e) => { e.stopPropagation(); onMove(1) }}><ArrowDown /></Button>
-          <Button size="icon-sm" variant="ghost" title="删除这句（可撤销）" className="hover:bg-destructive/10 hover:text-destructive" onClick={(e) => { e.stopPropagation(); onRemove() }}><X /></Button>
+          <Button size="icon-sm" variant="ghost" title="删除这句（可撤销）" className="hover:text-destructive" onClick={(e) => { e.stopPropagation(); onRemove() }}><X /></Button>
         </div>
       </div>
     </Reorder.Item>

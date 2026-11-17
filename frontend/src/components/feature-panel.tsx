@@ -64,7 +64,7 @@ export function MediaMosaic({ srcs, children }: { srcs: string[]; children?: Rea
   )
 }
 
-export function FeaturePanel({ header, items, active, onActive, empty, aside }: {
+export function FeaturePanel({ header, items, active, onActive, empty, aside, footer }: {
   header: ReactNode
   items: PanelItem[]
   active: number
@@ -73,12 +73,14 @@ export function FeaturePanel({ header, items, active, onActive, empty, aside }: 
   empty?: ReactNode
   /** 不用条目的媒体，右边固定显示这个 */
   aside?: ReactNode
+  /** 放在左侧列表下方的附加内容，例如创建项目的上传框。 */
+  footer?: ReactNode
 }) {
   const cur = items[Math.min(active, items.length - 1)]
   const right = aside ?? cur?.media
   return (
     <div className="grid grid-cols-1 gap-10 lg:grid-cols-2 lg:items-start lg:gap-16">
-      <div className="min-w-0">
+      <div className={cn("min-w-0", footer && "flex flex-col lg:min-h-[calc(100svh-13rem)]")}>
         {header}
         {items.length === 0 ? empty : (
           <ul className="flex flex-col gap-1">
@@ -134,6 +136,7 @@ export function FeaturePanel({ header, items, active, onActive, empty, aside }: 
             })}
           </ul>
         )}
+        {footer && <div className="mt-auto pt-8">{footer}</div>}
       </div>
 
       <div className={cn("lg:sticky lg:top-10", !aside && "hidden lg:block", !aside && !cur && "lg:hidden")}>

@@ -5,6 +5,11 @@
 
 @custom-variant dark (&:is(.dark *));
 
+/* 始终预留滚动条位置，长短页面切换时标题和版心不左右跳动。 */
+html {
+    scrollbar-gutter: stable;
+}
+
 @theme inline {
     --font-heading: var(--font-sans);
     --font-sans: 'Geist Variable', 'Microsoft YaHei UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;

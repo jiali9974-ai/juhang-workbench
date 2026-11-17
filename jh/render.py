@@ -7,7 +7,7 @@ from __future__ import annotations
 import json
 import shutil
 import subprocess
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import cv2
@@ -28,6 +28,8 @@ class Segment:
     zoom: float | None = None
     punch: bool = False                   # 同一机位跳剪：这一段稍微放大一点，跳剪看起来是有意的
     face: bool | None = None              # 这段画面有没有人脸（决定要不要磨皮）；None = 出片时再判断
+    a_start: float = 0.0                   # 独立音轨起点；裁掉停顿时声音与画面同步移动
+    a_dur: float | None = None             # 片尾补留白时，音轨到原边界截止，再补静音，避免带入后一句
 
 
 # ---------------- 原声剪辑：句子里面剪掉口误、犹豫声、长停顿 ----------------
@@ -66,7 +68,7 @@ def line_words(batch: str, l: dict) -> list | None:
     return l["words"]
 
 
-def keep_pieces(l: dict, words: list | None) -> list[tuple[float, float]]:
+def keep_pieces(l: dict, words: list | None, *, final: bool = False) -> list[tuple[float, float]]:
     """这句原话真正要用的时间段（素材里的秒数）：去掉 keep 里删掉的口误、句首句尾的犹豫声，压缩长停顿和拖长的字。"""
     if not words:
         return [(max(0.0, l["start"] - 0.08), l["end"] + 0.12)]
@@ -117,7 +119,8 @@ def keep_pieces(l: dict, words: list | None) -> list[tuple[float, float]]:
             continue
         if not kept[i]:
             continue
-        pieces.append([a, a + (KEEP_CHAR if b - a > MAX_CHAR else b - a)])
+        # 片尾最后一个字保留完整尾音，不能先按拖音规则截短，再补 0.1 秒。
+        pieces.append([a, b if final and i == last else a + (KEEP_CHAR if b - a > MAX_CHAR else b - a)])
     # 头尾留一点余量：挨着被剪掉的字时只留一点点，免得带进口误的声音
     lead = 0.03 if first > 0 and not _is_punct(words[first - 1][0]) else 0.08
     nxt = last + 1
@@ -233,8 +236,8 @@ def plan(script: dict, progress=None) -> list[Segment]:
     segs: list[Segment] = []
 
     if mode == "original" and cfg["render"].get("slip_trim", "audio") == "audio":
-        # 只删声音、不剪画面：画面按选中的句子整段用（和以前一样流畅），
-        # 声音里的口误、犹豫声、长停顿里的换气、拖长的尾音换成这条素材自己的环境底噪，主播原声不变
+        # 口误处保留连续画面，删掉的声音换成素材自己的环境底噪；
+        # 超过阈值的无人声停顿在分段规划完成后统一同步裁掉音画。
         if scriptmod.fill_keep(script) and script.get("id"):
             scriptmod.save(script)
         group: list[dict] = []
@@ -254,13 +257,14 @@ def plan(script: dict, progress=None) -> list[Segment]:
             v1 = g[-1]["end"] + 0.12
             keep_iv: list[tuple[float, float]] = []
             for l in g:
-                keep_iv += keep_pieces(l, line_words(script["batch"], l))
+                keep_iv += keep_pieces(l, line_words(script["batch"], l), final=l is script["lines"][-1])
             if keep_iv:
                 # 片段之间的间隔（config render.segment_gap）：上一段说完最后一个字留 0.02 秒、下一段开口前留 0.02 秒；
                 # 成片第一段开口前也只留 0.02 秒，开头第一幕直接说话。开口、说完的位置按声音判断（识别给的时间常差 0.2–0.7 秒）
                 gap = cfg["render"].get("segment_gap") or {}
                 lead = float(gap.get("first_lead", 0.02)) if gi == 0 else float(gap.get("lead", 0.02))
-                v0, v1 = tighten(material / g[0]["clip"], keep_iv[0][0], keep_iv[-1][1], lead, float(gap.get("tail", 0.02)))
+                tail = float(gap.get("final_tail", 0.1) if gi == len(groups) - 1 else gap.get("tail", 0.02))
+                v0, v1 = tighten(material / g[0]["clip"], keep_iv[0][0], keep_iv[-1][1], lead, tail)
             seg = Segment(clip=material / g[0]["clip"], v_start=v0, v_dur=v1 - v0, zoom=g[0].get("zoom"))
             seg.tts_wav = clean_audio(script["batch"], seg.clip, v0, v1 - v0, keep_iv)
             for l in g:
@@ -274,7 +278,7 @@ def plan(script: dict, progress=None) -> list[Segment]:
             scriptmod.save(script)
         flat: list[tuple[dict, float, float]] = []          # (句子, 素材起点, 素材终点)
         for l in script["lines"]:
-            for a, b in keep_pieces(l, line_words(script["batch"], l)):
+            for a, b in keep_pieces(l, line_words(script["batch"], l), final=l is script["lines"][-1]):
                 flat.append((l, a, b))
         if flat:                                            # 开头第一幕直接从第一个字开口的地方开始
             l, a, b = flat[0]
@@ -328,6 +332,7 @@ def plan(script: dict, progress=None) -> list[Segment]:
             seg.subs = timed_chunks(l["subtitle"], 0.02, d, max_chars)
             segs.append(seg)
 
+    segs = apply_speech_timing(segs, progress)
     rcfg = cfg["render"]
     for s in segs:
         if s.zoom is None:
@@ -336,6 +341,36 @@ def plan(script: dict, progress=None) -> list[Segment]:
         if s.punch:
             s.zoom = round(s.zoom * float(rcfg.get("jump_cut_punch", 1.08)), 3)
     return segs
+
+
+def apply_speech_timing(segs: list[Segment], progress=None) -> list[Segment]:
+    """处理最终人声音轨后，再同步裁画面、音轨和字幕；原声清理与配音都经过这里。"""
+    from . import speech_timing
+
+    cfg = config.load()["render"]
+    gap = cfg.get("segment_gap") or {}
+    threshold = float((cfg.get("silence_cut") or {}).get("threshold", 1.0))
+    lead, tail = float(gap.get("lead", .02)), float(gap.get("tail", .02))
+    result = []
+    for index, seg in enumerate(segs):
+        if progress:
+            progress(index, len(segs), f"裁剪无人声停顿 {index + 1}/{len(segs)}")
+        source, start = (seg.tts_wav, seg.a_start) if seg.tts_wav else (seg.clip, seg.v_start)
+        audio = _clip_audio(source, start, seg.v_dur)
+        voices = speech_timing.detect(audio, AUDIO_SR)
+        ranges = speech_timing.retained_ranges(voices, seg.v_dur, threshold=threshold, lead=lead, tail=tail,
+                                               first_lead=float(gap.get("first_lead", lead)) if index == 0 else lead)
+        if voices and index == len(segs) - 1:
+            a, _ = ranges[-1]
+            ranges[-1] = (a, round(max(b for _, b in voices) + float(gap.get("final_tail", .1)), 3))
+        for a, b in ranges:
+            subs = [(round(max(a, x) - a, 3), round(min(b, y) - a, 3), text)
+                    for x, y, text in seg.subs if min(b, y) > max(a, x)]
+            result.append(replace(seg, v_start=round(seg.v_start + a, 3), v_dur=round(b - a, 3),
+                                  a_start=round(seg.a_start + a, 3),
+                                  a_dur=round(max(0.0, min(b, seg.v_dur, seg.a_dur if seg.a_dur is not None else seg.v_dur) - a), 3),
+                                  subs=subs))
+    return result
 
 
 # ---------------- 只删声音：口误处换成环境底噪 ----------------
@@ -551,10 +586,11 @@ def encode_segment(seg: Segment, out: Path, settings: dict | None = None) -> Non
     filters.extend([f"fps={fps}", "setsar=1", "format=yuv420p", "tpad=stop_mode=clone:stop_duration=3"])
     vf = ",".join(filters)
     source = ["-ss", f"{seg.v_start:.3f}", "-t", f"{seg.v_dur + 0.5:.3f}", "-i", str(seg.clip)]
-    voice = ["-i", str(seg.tts_wav)] if seg.tts_wav else []
+    voice = ["-ss", f"{seg.a_start:.3f}", "-i", str(seg.tts_wav)] if seg.tts_wav else []
     f = 0.012                              # 切点两边各淡 12 毫秒，剪掉口误后接上不会“咔”一声
     fades = f"afade=t=in:d={f},afade=t=out:st={max(0.0, seg.v_dur - f):.3f}:d={f}"
-    af = f"[{int(bool(voice))}:a]aresample=48000,aformat=channel_layouts=stereo,apad,{fades}[a]"
+    audio_trim = f"atrim=duration={seg.a_dur:.3f}," if seg.a_dur is not None else ""
+    af = f"[{int(bool(voice))}:a]aresample=48000,aformat=channel_layouts=stereo,{audio_trim}apad,{fades}[a]"
     inputs = [*source, *voice, "-filter_complex", f"[0:v]{vf}[v];{af}",
               "-map", "[v]", "-map", "[a]", "-t", f"{seg.v_dur:.3f}", "-c:a", "aac", "-b:a", "256k"]
     encoder = _venc(intermediate=True)
@@ -620,34 +656,39 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     path.write_text(header + "\n".join(ev) + "\n", encoding="utf-8")
 
 
-def render(script: dict, progress=None) -> Path:
+def render(script: dict, progress=None, on_stage=None) -> Path:
     work = config.data_root() / "renders" / script["batch"] / script["id"]
     if work.exists():
         shutil.rmtree(work)
     work.mkdir(parents=True)
 
+    if on_stage:
+        on_stage("look" if scriptmod.resolved_voice_mode(script) == "original" else "tts")
     segs = plan(script, progress)
-    out_dir = config.data_root() / "outputs" / script["batch"]
+    out_dir = config.output_root() / script["batch"]
     out_dir.mkdir(parents=True, exist_ok=True)
     out = out_dir / f"{script['id']}.mp4"
     cover = None
     settings = look.current()
     ccfg = config.load()["render"].get("cover") or {}
     if ccfg.get("enabled") and script.get("cover"):
+        if on_stage:
+            on_stage("cover")
         from . import cover as covermod
 
         if progress:
             progress(0, 1, "做封面")
         try:
             # 边做边检查：脸不自然、抠图不对就换一帧重做（见 cover.make_best_cover，记录在 cover_check.json）
-            cover = covermod.make_best_cover(segs, script["cover"], work / "cover.png", settings=settings)
+            cover = covermod.make_best_cover(segs, script["cover"], work / "cover.png", settings=settings,
+                                             source_out=out_dir / f"{script['id']}_封面原图.jpg")
             from PIL import Image as _Image                 # cv2.imread 不认中文路径，用 PIL 存 jpg
 
             _Image.open(cover).convert("RGB").save(out_dir / f"{script['id']}_封面.jpg", quality=92)
         except Exception as e:  # noqa: BLE001  封面做不出来不影响出片
             (work / "cover_error.txt").write_text(repr(e), encoding="utf-8")
             cover = None
-    total = compose_segments(segs, work, out, progress, cover=cover, settings=settings)
+    total = compose_segments(segs, work, out, progress, cover=cover, settings=settings, on_stage=on_stage)
     cover_jpg = out_dir / f"{script['id']}_封面.jpg"
     if cover and cover_jpg.exists():
         embed_cover(out, cover_jpg)          # 文件自带封面：电脑文件夹、播放器、微信里看到的都是做好的封面
@@ -668,13 +709,15 @@ def embed_cover(video: Path, cover_jpg: Path) -> None:
 
 
 def compose_segments(segs: list[Segment], work: Path, out: Path, progress=None,
-                     cover: Path | None = None, settings: dict | None = None) -> float:
+                     cover: Path | None = None, settings: dict | None = None, on_stage=None) -> float:
     """逐段编码 → 拼接 → 烧字幕和角标（左上角竖排黄字、底部声明）、响度统一、混背景音乐 → 导出 out。返回总时长。
     素材剪辑和产品图生视频（口播带货）共用这一套成片样式。"""
     cfg = config.load()
     settings = look.current() if settings is None else settings
     work.mkdir(parents=True, exist_ok=True)
     seg_files = []
+    if on_stage:
+        on_stage("look")
     for i, s in enumerate(segs):
         if progress:
             progress(i, len(segs), f"剪辑片段 {i + 1}/{len(segs)}")
@@ -682,6 +725,8 @@ def compose_segments(segs: list[Segment], work: Path, out: Path, progress=None,
         encode_segment(s, f, settings)
         seg_files.append(f)
 
+    if on_stage:
+        on_stage("render")
     (work / "concat.txt").write_text("".join(f"file '{f.name}'\n" for f in seg_files), encoding="utf-8")
     media.run_ffmpeg(["-f", "concat", "-safe", "0", "-i", str(work / "concat.txt"), "-c", "copy",
                       str(work / "body.mp4")])

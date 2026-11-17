@@ -34,10 +34,10 @@ export default function App() {
             <AnimatePresence mode="wait" initial={false}>
               <Page key={pageKey}>
                 {route.page === "home" && <StartPage />}
-                {route.page === "gen" && <GenPage batch={route.batch} />}
+                {route.page === "gen" && <GenPage />}
                 {route.page === "projects" && <ProjectsPage />}
                 {route.page === "beauty" && <BeautyPage batch={route.batch} />}
-                {route.page === "flow" && <FlowPage />}
+                {route.page === "flow" && <FlowPage batch={route.batch} jobId={route.job} />}
                 {route.page === "batch" && <BatchPage batch={route.batch} tab={route.tab} />}
                 {route.page === "script" && <ScriptEditor batch={route.batch} id={route.id} />}
                 {route.page === "tvc" && <TvcHome />}
@@ -46,7 +46,7 @@ export default function App() {
             </AnimatePresence>
           </main>
           <AnimatePresence>{route.page !== "home" && <AppDock key="dock" route={route} />}</AnimatePresence>
-          <JobsDock />
+          <JobsDock hideCompleted={route.page === "gen"} />
           <Toaster theme="light" position="top-right" richColors closeButton />
         </JobsProvider>
       </TooltipProvider>

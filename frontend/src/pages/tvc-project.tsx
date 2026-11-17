@@ -111,11 +111,11 @@ export function TvcProjectPage({ id }: { id: string }) {
           <DeleteProject kind="tvc" id={id} name={plan?.title || p.brief.product} size="default" current />
           <CloudBadge s={cloud} />
           {!kfDone ? (
-            <Button className="gold-gradient shine font-bold" disabled={running} onClick={() => act(() => tvcApi.run(id, "keyframes"), "开始出分镜", "分镜出好了，请审核")}>
+            <Button className="font-bold" disabled={running} aria-busy={running} onClick={() => act(() => tvcApi.run(id, "keyframes"), "开始出分镜", "分镜出好了，请审核")}>
               {running ? <Loader2 className="animate-spin" /> : <Wand2 />}生成分镜
             </Button>
           ) : !p.final ? (
-            <Button className="gold-gradient shine font-bold" disabled={running} onClick={() => act(() => tvcApi.run(id, "final"), "开始生成视频段并合成，约 6–8 分钟", "成片出好了")}>
+            <Button className="font-bold" disabled={running} aria-busy={running} onClick={() => act(() => tvcApi.run(id, "final"), "开始生成视频段并合成，约 6–8 分钟", "成片出好了")}>
               {running ? <Loader2 className="animate-spin" /> : <Rocket />}确认分镜，生成视频
             </Button>
           ) : (
@@ -254,7 +254,7 @@ export function TvcProjectPage({ id }: { id: string }) {
                 <h2 className="text-lg font-semibold">成片</h2>
                 <p className="text-sm text-muted-foreground">1080×1920 · 24fps · {p.segments.length} 段拼接。音效来自 H3，背景音乐按方向「{plan?.bgm}」后期再铺。</p>
                 <div className="flex gap-2">
-                  <Button asChild className="gold-gradient font-bold"><a href={tvcFile(id, p.final)} download={`${plan?.title || id}.mp4`}><Download />下载 MP4</a></Button>
+                  <Button asChild className="font-bold"><a href={tvcFile(id, p.final)} download={`${plan?.title || id}.mp4`}><Download />下载 MP4</a></Button>
                   <Button variant="outline" disabled={running} onClick={() => act(() => tvcApi.compose(id), "重新合成", "重新合成好了")}><RefreshCw />重新合成</Button>
                 </div>
               </div>

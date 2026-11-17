@@ -3,18 +3,18 @@ import { CheckCircle2, ChevronUp, CircleAlert, Loader2 } from "lucide-react"
 import { AnimatePresence, motion } from "motion/react"
 
 import { ease } from "@/components/motion"
-import { useJobs } from "@/hooks/use-jobs"
+import { useTaskList } from "@/hooks/use-task-list"
 import { cn } from "@/lib/utils"
 
 const STATE = { queued: "排队", running: "", done: "完成", error: "出错" } as const
 
-export function JobsDock() {
-  const { jobs, active } = useJobs()
+export function JobsDock({ hideCompleted = false }: { hideCompleted?: boolean }) {
+  const { jobs, active } = useTaskList()
   const [open, setOpen] = useState(false)
   const busy = active.length > 0
   return (
     <AnimatePresence>
-      {jobs.length > 0 && (
+      {jobs.length > 0 && (!hideCompleted || busy) && (
         <motion.div
           layout
           initial={{ opacity: 0, y: 24, scale: 0.96 }}
@@ -38,7 +38,7 @@ export function JobsDock() {
           {/* 收起时顶部的细进度条 */}
           {busy && !open && (
             <div className="h-0.5 bg-muted">
-              <motion.div className="h-full bg-primary" animate={{ width: `${Math.round(active[0].progress * 100)}%` }} transition={{ duration: 0.5, ease }} />
+              <motion.div className={cn("h-full bg-primary", active[0].kind === "request" && "animate-pulse")} animate={{ width: active[0].kind === "request" ? "33%" : `${Math.round(active[0].progress * 100)}%` }} transition={{ duration: 0.5, ease }} />
             </div>
           )}
           <AnimatePresence initial={false}>
@@ -52,7 +52,7 @@ export function JobsDock() {
                 className="scrollbar-thin max-h-72 overflow-y-auto border-t"
               >
                 <AnimatePresence initial={false}>
-                  {jobs.slice(0, 12).map((j) => (
+                  {[...active, ...jobs.filter((job) => job.status !== "running" && job.status !== "queued")].slice(0, Math.max(12, active.length)).map((j) => (
                     <motion.div
                       key={j.id}
                       layout
@@ -65,7 +65,7 @@ export function JobsDock() {
                         {j.status === "done" && <CheckCircle2 className="size-3.5 text-ok" />}
                         <span className="flex-1 truncate">{j.title}</span>
                         <span className="text-xs text-muted-foreground tabular">
-                          {j.status === "running" ? `${Math.round(j.progress * 100)}%` : STATE[j.status]}
+                          {j.kind === "request" ? "进行中" : j.status === "running" ? `${Math.round(j.progress * 100)}%` : STATE[j.status]}
                         </span>
                       </div>
                       <div className={cn("mt-0.5 truncate text-xs", j.status === "error" ? "text-destructive" : "text-muted-foreground")}>
@@ -75,7 +75,7 @@ export function JobsDock() {
                         <motion.div
                           className={cn("h-full rounded-full", j.status === "done" ? "bg-ok" : j.status === "error" ? "bg-destructive" : "bg-primary")}
                           initial={false}
-                          animate={{ width: `${j.status === "done" ? 100 : Math.round(j.progress * 100)}%` }}
+                          animate={{ width: j.kind === "request" ? "33%" : `${j.status === "done" ? 100 : Math.round(j.progress * 100)}%` }}
                           transition={{ duration: 0.5, ease }}
                         />
                       </div>

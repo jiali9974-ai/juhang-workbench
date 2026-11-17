@@ -1,15 +1,19 @@
 // 项目页：左边是全部项目（文字），右边是选中项目的成片视频或素材缩略图。
 import { useCallback, useEffect, useState } from "react"
-import { FolderOpen, Loader2, Plus, Settings2, Sparkles } from "lucide-react"
+import { FolderOpen, Loader2, Settings2, Sparkles } from "lucide-react"
 import { toast } from "sonner"
 
 import { DeleteProject } from "@/components/delete-project"
 import { FeaturePanel, MediaImage, MediaMosaic, MediaVideo, type PanelItem } from "@/components/feature-panel"
 import { Button } from "@/components/ui/button"
+import { ProjectUpload } from "@/components/project-upload"
+import { useAllUploads } from "@/components/upload-queue"
+import { useSessionState } from "@/hooks/use-session-state"
+import { PAGE_CONTAINER, PAGE_TITLE } from "@/lib/layout"
 import { useJobs } from "@/hooks/use-jobs"
-import { go } from "@/hooks/use-route"
+import { followTask, getRoute, go } from "@/hooks/use-route"
 import { api, urls, type Batch } from "@/lib/api"
-import { getCurrent, jobOf } from "@/lib/current"
+import { getCurrent, jobOf, setCurrent } from "@/lib/current"
 import { minutes } from "@/lib/format"
 
 type Media = { video?: string; poster?: string; image?: string; thumbs?: string[] }
@@ -58,9 +62,12 @@ function ProjectMedia({ b }: { b: Batch }) {
 }
 
 export function ProjectsPage() {
-  const { active, version } = useJobs()
+  const { active, version, watch } = useJobs()
   const [list, setList] = useState<Batch[] | null>(null)
-  const [sel, setSel] = useState<number | null>(null)
+  const [sel, setSel] = useSessionState<string | null>("projects.selected", getCurrent)
+  const [starting, setStarting] = useSessionState<string | null>("projects.starting", null)
+  const uploads = useAllUploads()
+  const refresh = useCallback(() => { window.dispatchEvent(new Event("jh:refresh")) }, [])
 
   const load = useCallback(() => {
     api.batches().then(setList).catch((e) => toast.error("加载失败", { description: String(e) }))
@@ -70,35 +77,41 @@ export function ProjectsPage() {
     window.addEventListener("jh:refresh", load)
     return () => window.removeEventListener("jh:refresh", load)
   }, [load])
-  // 第一次进来默认选中当前项目
-  useEffect(() => {
-    if (list && sel === null) setSel(Math.max(0, list.findIndex((b) => b.batch === getCurrent())))
-  }, [list, sel])
+
+  async function start(project: Batch) {
+    if (starting) return
+    const source = getRoute()
+    setStarting(project.batch)
+    try {
+      const job = await api.auto(project.batch)
+      watch(job, (done) => toast.success(`已生成 ${(done.result as string[]).length} 条成片`))
+      setCurrent(project.batch)
+      followTask(source, project.batch, job.id)
+    } catch (e) {
+      toast.error("没法开始生成", { description: String(e).replace(/^Error: /, "") })
+    } finally {
+      setStarting(null)
+    }
+  }
 
   if (!list) return <div className="grid min-h-svh place-items-center"><Loader2 className="size-6 animate-spin text-muted-foreground" /></div>
 
   const header = (
     <div className="mb-8">
-      <div className="flex items-center justify-between gap-2">
-        <span className="text-xs text-muted-foreground">全部项目</span>
-        <Button variant="ghost" size="sm" className="rounded-full text-muted-foreground" onClick={() => go({ page: "home" })}><Plus />新项目</Button>
-      </div>
-      <h1 className="mt-3 text-4xl font-bold tracking-tight md:text-5xl lg:text-6xl">项目</h1>
-      <p className="mt-4 text-sm text-muted-foreground">
-        {list.length ? `${list.length} 个项目，最近改过的在前面。点一个看成片，或者进去改素材和脚本。` : ""}
-      </p>
+      <h1 className={PAGE_TITLE}>项目</h1>
     </div>
   )
 
   const items: PanelItem[] = list.map((b) => {
     const busy = active.some((j) => jobOf(j, b.batch))
+    const uploading = uploads.some((item) => item.batch === b.batch && (item.status === "queued" || item.status === "uploading"))
     return {
       key: b.batch,
       title: b.batch,
       badge: (
         <span className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground tabular">
-          {busy && <Loader2 className="size-3.5 animate-spin" />}
-          {busy ? "生成中" : b.scripts ? `${b.rendered}/${b.scripts} 条成片` : `${b.clips} 个视频`}
+          {(busy || uploading) && <Loader2 className="size-3.5 animate-spin" />}
+          {uploading ? "上传中" : busy ? "生成中" : b.scripts ? `${b.rendered}/${b.scripts} 条成片` : `${b.clips} 个视频`}
         </span>
       ),
       detail: (
@@ -107,8 +120,8 @@ export function ProjectsPage() {
             {b.clips} 个视频{b.total_seconds ? ` · ${minutes(b.total_seconds)} 分钟` : ""} · 已识别 {b.transcribed}/{b.clips} · {b.scripts} 条脚本 · {b.rendered} 条已出片
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            <Button size="sm" className="rounded-full bg-foreground text-background hover:bg-foreground/85" onClick={() => go({ page: "gen", batch: b.batch })}>
-              <Sparkles />查看生成
+            <Button size="sm" className="rounded-full" disabled={busy || uploading || !!starting || !b.clips} aria-busy={busy || starting === b.batch} onClick={() => start(b)}>
+              {starting === b.batch ? <Loader2 className="animate-spin" /> : <Sparkles />}开始生成
             </Button>
             <Button size="sm" variant="outline" className="rounded-full" onClick={() => go({ page: "batch", batch: b.batch, tab: b.clips ? "scripts" : "clips" })}>
               <Settings2 />素材与脚本
@@ -122,20 +135,14 @@ export function ProjectsPage() {
   })
 
   return (
-    <div className="mx-auto max-w-6xl px-6 pt-10 pb-40">
+    <div className={PAGE_CONTAINER}>
       <FeaturePanel
         header={header}
         items={items}
-        active={Math.min(sel ?? 0, Math.max(0, items.length - 1))}
-        onActive={setSel}
-        empty={
-          <div className="rounded-2xl border border-dashed p-10 text-center text-sm text-muted-foreground">
-            还没有项目
-            <div className="mt-4">
-              <Button className="rounded-full bg-foreground text-background hover:bg-foreground/85" onClick={() => go({ page: "home" })}>上传素材</Button>
-            </div>
-          </div>
-        }
+        active={Math.max(0, list.findIndex((project) => project.batch === sel))}
+        onActive={(index) => setSel(list[index].batch)}
+        empty={<div className="py-10 text-center text-sm text-muted-foreground">还没有项目</div>}
+        footer={<ProjectUpload onCreated={(batch) => { setSel(batch); setCurrent(batch); refresh() }} onUploaded={refresh} />}
       />
     </div>
   )

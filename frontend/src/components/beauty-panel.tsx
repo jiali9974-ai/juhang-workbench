@@ -1,12 +1,15 @@
-import { useCallback, useEffect, useRef, useState, type ReactNode } from "react"
-import { Eye, ImageOff, Loader2, RefreshCw, RotateCcw, Save, Sparkles, Sun, Wand2 } from "lucide-react"
+import { useCallback, useEffect, useState, useSyncExternalStore, type ReactNode } from "react"
+import { Eye, ImageOff, Loader2, RotateCcw, Save, Sparkles, Sun, Wand2 } from "lucide-react"
 import { toast } from "sonner"
 
 import { MediaFrame } from "@/components/feature-panel"
 import { Button } from "@/components/ui/button"
 import { useJobs } from "@/hooks/use-jobs"
-import { api, urls, type LookSettings } from "@/lib/api"
+import { api, urls, type LookSettings, type OutputVideo } from "@/lib/api"
 import { cn } from "@/lib/utils"
+import { useSessionState } from "@/hooks/use-session-state"
+import { previewCache } from "@/lib/background-tasks"
+import defaultTestImage from "../../../assets/beauty-default.jpg"
 
 type Kind = "face" | "watch"
 type Mode = "beauty" | "original" | "wipe"
@@ -45,55 +48,43 @@ function Segmented<T extends string>({ value, options, onChange }: { value: T; o
 
 /**
  * 美颜调色：左边滑块调强度，右边实时看原片和美颜后的对比。保存后批量出片都用这个设置。
- * batch：用哪个项目的画面预览、「重新出片」出哪个项目；没有项目时只能调参数，不能预览。
+ * source：成片封面原图，null 使用独立的默认图；batch 仅用于「重新出片」。
  */
-export function BeautyEditor({ batch, scripts, header }: { batch: string | null; scripts: number; header?: ReactNode }) {
-  const { watch } = useJobs()
-  const [s, setS] = useState<LookSettings | null>(null)
-  const [defaults, setDefaults] = useState<LookSettings | null>(null)
-  const [saved, setSaved] = useState<LookSettings | null>(null)
-  const [kind, setKind] = useState<Kind>("face")
-  const [frameIdx, setFrameIdx] = useState<Record<Kind, number>>({ face: 0, watch: 0 })
-  const [frameCount, setFrameCount] = useState(1)
-  const [mode, setMode] = useState<Mode>("wipe")
-  const [wipe, setWipe] = useState(50)
+export function BeautyEditor({ batch, scripts, source, revision, header }: {
+  batch: string | null; scripts: number; source: Pick<OutputVideo, "batch" | "id"> | null; revision: string; header?: ReactNode
+}) {
+  const { watch, active } = useJobs()
+  const [s, setS] = useSessionState<LookSettings | null>("beauty.settings", null)
+  const [defaults, setDefaults] = useSessionState<LookSettings | null>("beauty.defaults", null)
+  const [saved, setSaved] = useSessionState<LookSettings | null>("beauty.saved", null)
+  const [kind, setKind] = useSessionState<Kind>("beauty.kind", "face")
+  const [mode, setMode] = useSessionState<Mode>("beauty.mode", "wipe")
+  const [wipe, setWipe] = useSessionState("beauty.wipe", 50)
   const [hold, setHold] = useState(false)
-  const [img, setImg] = useState<{ original: string; beauty: string } | null>(null)
-  const [error, setError] = useState<string | null>(null)
-  const [loading, setLoading] = useState(false)
-  const [busy, setBusy] = useState(false)
-  const seq = useRef(0)
+  const [busy, setBusy] = useSessionState("beauty.saving", false)
+  const rendering = active.some((job) => job.kind === "render" && batch && job.title.startsWith(`${batch}_`))
+  const previewKey = s ? JSON.stringify(["beauty-source", source, revision, s, kind]) : null
+  type PreviewResult = Awaited<ReturnType<typeof api.lookPreview>>
+  const snapshot = useCallback(() => previewCache.get<PreviewResult>(previewKey), [previewKey])
+  const preview = useSyncExternalStore(previewCache.subscribe, snapshot, snapshot)
+  const img = preview.data ? {
+    original: urls.lookFile(preview.data.original),
+    beauty: urls.lookFile(preview.data.beauty),
+  } : null
+  const error = preview.error
+  const loading = !!previewKey && (preview.status === "idle" || preview.status === "loading")
 
   useEffect(() => {
+    if (s) return
     api.getLook().then((r) => { setS(r.settings); setSaved(r.settings); setDefaults(r.defaults) }).catch(() => {})
-  }, [])
-  useEffect(() => {
-    setImg(null)
-    setError(null)
-    setFrameIdx({ face: 0, watch: 0 })
-  }, [batch])
+  }, [s, setS, setSaved, setDefaults])
 
   // 滑块一停就出新的对比图（等 350 毫秒，拖动过程中不连续请求）
-  const refresh = useCallback(async (b: string, settings: LookSettings, k: Kind, index: number) => {
-    const my = ++seq.current
-    setLoading(true)
-    try {
-      const r = await api.lookPreview(b, k, settings, index)
-      if (my !== seq.current) return
-      setImg({ original: urls.lookFile(r.original), beauty: urls.lookFile(r.beauty) })
-      setFrameCount(r.count || 1)
-      setError(null)
-    } catch (e) {
-      if (my === seq.current) setError(String(e).replace(/^Error: /, ""))
-    } finally {
-      if (my === seq.current) setLoading(false)
-    }
-  }, [])
   useEffect(() => {
-    if (!s || !batch) return
-    const t = setTimeout(() => refresh(batch, s, kind, frameIdx[kind]), 350)
+    if (!s || !previewKey) return
+    const t = setTimeout(() => previewCache.start(previewKey, () => api.lookPreview(source, kind, s)), 350)
     return () => clearTimeout(t)
-  }, [batch, s, kind, frameIdx, refresh])
+  }, [source, s, kind, previewKey])
 
   const set = (patch: Partial<LookSettings>) => setS((x) => (x ? { ...x, ...patch } : x))
   const changed = !!s && !!saved && JSON.stringify(s) !== JSON.stringify(saved)
@@ -141,14 +132,14 @@ export function BeautyEditor({ batch, scripts, header }: { batch: string | null;
             </label>
             <div className="grid gap-5 px-1">
               <Slider label="磨皮" hint="跟随人脸局部磨皮，保护眼眉和嘴唇。0 关闭，50 是试片的力度。" value={s.smooth} onChange={(v) => set({ smooth: v })} disabled={!s.enabled} />
-              <Slider label="提亮调色" hint="人脸提亮、背景变白、肤色偏粉。0 = 原片颜色，100 = 照参考视频调的" value={s.tone} onChange={(v) => set({ tone: v })} disabled={!s.enabled} />
+              <Slider label="提亮调色" hint="只提亮画面，保留自然肤色与白色，保护高光。0 = 不额外提亮" value={s.tone} onChange={(v) => set({ tone: v })} disabled={!s.enabled} />
               <Slider label="手表特写锐化" hint="只用在没有人脸的画面，钻石、表盘更清楚。0 = 不锐化" value={s.sharpen} onChange={(v) => set({ sharpen: v })} disabled={!s.enabled} />
             </div>
             <div className="flex flex-wrap items-center gap-2 border-t pt-5">
-              <Button className="rounded-full bg-foreground text-background hover:bg-foreground/85" disabled={busy || !changed} onClick={() => save(false)}>
+              <Button className="rounded-full" disabled={busy || !changed} aria-busy={busy} onClick={() => save(false)}>
                 {busy ? <Loader2 className="animate-spin" /> : <Save />}{changed ? "保存设置" : "已保存"}
               </Button>
-              <Button variant="outline" className="rounded-full" disabled={busy || !batch || !scripts} onClick={() => save(true)}
+              <Button variant="outline" className="rounded-full" disabled={busy || rendering || !batch || !scripts} aria-busy={busy || rendering} onClick={() => save(true)}
                 title={batch ? `会覆盖「${batch}」现在的成片` : undefined}>
                 <Wand2 />保存并重新出片{batch && scripts ? `（${batch} · ${scripts} 条）` : ""}
               </Button>
@@ -167,6 +158,12 @@ export function BeautyEditor({ batch, scripts, header }: { batch: string | null;
           <Segmented value={mode} onChange={setMode} options={[["wipe", "左右对比"], ["beauty", "美颜后"], ["original", "原片"]]} />
         </div>
         <MediaFrame>
+          {!img && !source && (
+            <>
+              <img src={defaultTestImage} className="absolute inset-0 size-full object-cover" alt="默认美颜测试图" draggable={false} />
+              <span className="absolute top-2 left-2 rounded bg-black/55 px-1.5 text-[11px] text-white">原图</span>
+            </>
+          )}
           {img && (
             <>
               <img src={showOriginal ? img.original : img.beauty} className="absolute inset-0 size-full object-cover" draggable={false} alt="" />
@@ -186,31 +183,25 @@ export function BeautyEditor({ batch, scripts, header }: { batch: string | null;
               )}
             </>
           )}
-          {!batch ? (
-            <div className="absolute inset-0 grid place-items-center p-6 text-center text-sm text-muted-foreground">
-              <div className="grid justify-items-center gap-2"><ImageOff className="size-6" />先上传素材，才能用素材里的画面预览</div>
-            </div>
-          ) : error && !img ? (
+          {error && !img && source ? (
             <div className="absolute inset-0 grid place-items-center p-6 text-center text-sm text-muted-foreground">
               <div className="grid justify-items-center gap-2"><ImageOff className="size-6" />{error}</div>
             </div>
-          ) : (loading || !img) && (
-            <div className="absolute inset-0 grid place-items-center bg-black/10"><Loader2 className="size-6 animate-spin text-white drop-shadow" /></div>
+          ) : loading && (
+            <div className="absolute right-3 bottom-3 rounded-full bg-black/50 p-2"><Loader2 className="size-4 animate-spin text-white" aria-label="正在计算美颜预览" /></div>
           )}
         </MediaFrame>
+        {error && !img && !source && <p role="alert" className="text-center text-xs text-destructive">美颜预览失败：{error}</p>}
         <div className="flex flex-wrap items-center justify-center gap-2">
-          <Button size="sm" variant="ghost" className="rounded-full" disabled={!batch || loading || frameCount < 2}
-            title="在这个项目的素材里挑好的几帧之间切换"
-            onClick={() => setFrameIdx((x) => ({ ...x, [kind]: (x[kind] + 1) % Math.max(1, frameCount) }))}>
-            <RefreshCw />换一帧{frameCount > 1 && <span className="text-muted-foreground tabular">{frameIdx[kind] % frameCount + 1}/{frameCount}</span>}
-          </Button>
           <Button size="sm" variant="outline" className="rounded-full select-none" disabled={!img}
             onPointerDown={() => setHold(true)} onPointerUp={() => setHold(false)} onPointerLeave={() => setHold(false)}>
             <Eye />按住看原片
           </Button>
         </div>
         <p className="text-center text-xs text-muted-foreground">
-          {mode === "wipe" ? "在画面上左右拖动，看原片和美颜后的区别" : "预览是这个项目素材里的一帧，按成片分辨率处理"}
+          {preview.data?.fallback ? "正在使用默认测试图" :
+            mode === "wipe" ? "在画面上左右拖动，看原片和美颜后的区别" :
+              source ? "封面抠图前的原图" : "默认测试图"}
         </p>
       </div>
     </div>

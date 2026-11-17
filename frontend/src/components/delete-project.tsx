@@ -18,14 +18,14 @@ import { go } from "@/hooks/use-route"
 import { getCurrent, setCurrent } from "@/lib/current"
 import { cn } from "@/lib/utils"
 
-async function del(kind: "batch" | "tvc", id: string): Promise<{ recycled_to: string }> {
+async function del(kind: "batch" | "tvc", id: string): Promise<{ ok: boolean }> {
   const url = kind === "batch" ? `/api/batches/${encodeURIComponent(id)}` : `/api/tvc/${encodeURIComponent(id)}`
   const r = await fetch(url, { method: "DELETE" })
   if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.statusText)
   return r.json()
 }
 
-/** 删除项目：挪进工作台回收站（data/_recycle），可以恢复 */
+/** 删除项目：直接删除该项目对应的文件。 */
 export function DeleteProject({ kind, id, name, icon, className, current, size = "lg" }: {
   kind: "batch" | "tvc"
   id: string
@@ -41,9 +41,9 @@ export function DeleteProject({ kind, id, name, icon, className, current, size =
   async function confirm() {
     setBusy(true)
     try {
-      const r = await del(kind, id)
+      await del(kind, id)
       setOpen(false)
-      toast.success(`已删除「${name}」`, { description: `挪到了回收站：${r.recycled_to}，需要时可以挪回来` })
+      toast.success(`已删除「${name}」`)
       window.dispatchEvent(new Event("jh:refresh"))
       if (kind === "batch" && getCurrent() === id) setCurrent(null)
       if (current) go(kind === "batch" ? { page: "projects" } : { page: "tvc" })
@@ -66,7 +66,7 @@ export function DeleteProject({ kind, id, name, icon, className, current, size =
             <Trash2 className="size-3.5" />
           </button>
         ) : (
-          <Button variant="ghost" size={size} className={cn("text-muted-foreground hover:bg-destructive/10 hover:text-destructive", className)}>
+          <Button variant="ghost" size={size} className={cn("text-muted-foreground hover:text-destructive", className)}>
             <Trash2 />删除项目
           </Button>
         )}
@@ -76,13 +76,13 @@ export function DeleteProject({ kind, id, name, icon, className, current, size =
           <AlertDialogTitle>删除项目「{name}」？</AlertDialogTitle>
           <AlertDialogDescription>
             {kind === "batch"
-              ? "项目里的原始视频、识别结果、剪辑脚本和成片会一起挪到工作台回收站（data\\_recycle），不会立刻从硬盘上抹掉，需要时可以挪回来。"
-              : "项目里的产品图、方案、分镜、视频段和成片会挪到工作台回收站（data\\_recycle），需要时可以挪回来。"}
+              ? "将直接删除该项目的原始视频、识别结果、剪辑脚本和成片，删除后无法恢复。"
+              : "将直接删除该项目的产品图、方案、分镜、视频段和成片，删除后无法恢复。"}
           </AlertDialogDescription>
         </AlertDialogHeader>
         <AlertDialogFooter>
           <AlertDialogCancel disabled={busy}>取消</AlertDialogCancel>
-          <AlertDialogAction variant="destructive" disabled={busy} onClick={(e) => { e.preventDefault(); confirm() }}>
+          <AlertDialogAction variant="destructive" disabled={busy} aria-busy={busy} onClick={(e) => { e.preventDefault(); confirm() }}>
             {busy && <Loader2 className="animate-spin" />}删除
           </AlertDialogAction>
         </AlertDialogFooter>
@@ -97,7 +97,7 @@ export function ProjectMissing({ kind, name }: { kind: "batch" | "tvc"; name: st
     <div className="mx-auto grid max-w-md place-items-center px-6 pt-24 text-center">
       <div className="grid size-12 place-items-center rounded-xl bg-muted text-muted-foreground"><FolderX className="size-6" /></div>
       <div className="mt-4 text-lg font-semibold">项目「{name}」不存在</div>
-      <p className="mt-1 text-sm text-muted-foreground">可能已经被删除（在工作台回收站 data\_recycle 里可以找回），或者链接写错了。</p>
+      <p className="mt-1 text-sm text-muted-foreground">该项目可能已删除，或者链接有误。</p>
       <Button variant="outline" className="mt-5" onClick={() => go(kind === "batch" ? { page: "projects" } : { page: "tvc" })}>
         <ArrowLeft />返回{kind === "batch" ? "全部项目" : "产品图生视频"}
       </Button>

@@ -2,7 +2,7 @@
 
 设置存在 data/settings/look.json，出片时读取：
   smooth  局部磨皮强度 0–1（0 = 不磨）。0.5 对应 1234_01 磨皮试片的力度。
-  tone    提亮调色强度 0–1（0 = 原片颜色）。1 = 照参考视频调的：人脸提亮、近白压成纯白、肤色偏粉、饱和度 +8%
+  tone    提亮调色强度 0–1（0 = 不额外提亮）。只提升亮度，保留自然肤色和中性白，不叠加暖色或饱和度
   sharpen 手表特写锐化强度 0–1（0 = 不锐化）。只用在没有人脸的画面
   normalize 统一光线：不同素材先按老板肤色拉齐亮度和白平衡，再调色（见 normalize.py）
 """
@@ -10,13 +10,14 @@ from __future__ import annotations
 
 import json
 import subprocess
+import threading
 import time
 from pathlib import Path
 
 from . import config
 
-DEFAULTS = {"enabled": True, "normalize": True, "smooth": 0.5, "tone": 1.0, "sharpen": 1.0}
-# tone=1 时的曲线（参考视频量出来的）；强度 t 时每个点按 x + t*(y-x) 插值
+DEFAULTS = {"enabled": True, "normalize": True, "smooth": 0.5, "tone": 0.5, "sharpen": 0.5}
+# tone=1 时的亮度曲线；强度 t 时每个点按 x + t*(y-x) 插值，黑白端点保持不变。
 CURVE = [(0, 0), (0.12, 0.155), (0.35, 0.465), (0.6, 0.68), (0.85, 0.885), (1, 1)]
 
 
@@ -46,14 +47,27 @@ def current() -> dict:
 
 def normalize(s: dict) -> dict:
     return {"enabled": bool(s.get("enabled", True)), "normalize": bool(s.get("normalize", True)),
-            "smooth": round(_clamp(s.get("smooth")), 3),
-            "tone": round(_clamp(s.get("tone")), 3), "sharpen": round(_clamp(s.get("sharpen")), 3)}
+            "smooth": round(_clamp(s.get("smooth", DEFAULTS["smooth"])), 3),
+            "tone": round(_clamp(s.get("tone", DEFAULTS["tone"])), 3),
+            "sharpen": round(_clamp(s.get("sharpen", DEFAULTS["sharpen"])), 3)}
 
 
 def save(s: dict) -> dict:
     s = normalize(s)
     _path().write_text(json.dumps(s, ensure_ascii=False, indent=1), encoding="utf-8")
     return s
+
+
+def _tone_filter(strength: float) -> str:
+    """在 YUV 的亮度通道上提亮，U/V 原样保留，避免增红、增饱和造成暖黄偏色。"""
+    points = [(16 + 219 * x, 16 + 219 * (x + strength * (y - x))) for x, y in CURVE]
+    expression = "val"
+    for (x0, y0), (x1, y1) in reversed(list(zip(points, points[1:]))):
+        segment = f"{y0:.4f}+(val-{x0:.4f})*{(y1 - y0) / (x1 - x0):.6f}"
+        expression = f"if(lte(val,{x1:.4f}),{segment},{expression})"
+    expression = f"if(lte(val,16),val,if(gte(val,235),val,{expression}))"
+    # JPEG 为全范围，视频通常为有限范围；先统一范围，再按 16–235 的亮度曲线处理。
+    return f"scale=in_range=auto:out_range=tv,format=yuv444p,lutyuv=y='{expression}':u=val:v=val"
 
 
 def filters(s: dict | None = None) -> dict:
@@ -67,11 +81,7 @@ def filters(s: dict | None = None) -> dict:
     if s["sharpen"] > 0.01:
         out["sharpen"] = f"unsharp=lx=5:ly=5:la={0.45 * s['sharpen']:.2f}:cx=5:cy=5:ca=0"
     if s["tone"] > 0.01:
-        t = s["tone"]
-        pts = " ".join(f"{x:g}/{x + t * (y - x):.3f}" for x, y in CURVE)
-        lv = 1 - 0.03 * t
-        out["tone"] = (f"curves=master='{pts}',colorlevels=rimax={lv:.3f}:gimax={lv:.3f}:bimax={lv:.3f},"
-                       f"eq=saturation={1 + 0.08 * t:.3f},colorbalance=rm={0.06 * t:.3f}:gm={-0.03 * t:.3f}:bm=0.0:bh={0.01 * t:.3f}")
+        out["tone"] = _tone_filter(s["tone"])
     return out
 
 
@@ -221,3 +231,59 @@ def _ff(args: list[str]) -> None:
                        encoding="utf-8", errors="ignore")
     if r.returncode:
         raise RuntimeError(f"预览图生成失败：{r.stderr[-600:]}")
+
+
+_source_preview_lock = threading.Lock()
+
+
+def preview_source(source: dict | None, kind: str, s: dict | None = None,
+                   active_jobs: list[dict] | None = None) -> dict:
+    # 相同缓存文件生成完成后才交给下一个请求，避免返回仍在写入的 JPEG。
+    with _source_preview_lock:
+        return _preview_source(source, kind, s, active_jobs)
+
+
+def _preview_source(source: dict | None, kind: str, s: dict | None,
+                    active_jobs: list[dict] | None) -> dict:
+    """用未美颜的封面原图 / 内置默认图测试，素材删除后也能继续对比。"""
+    import hashlib
+    import shutil
+    from . import look_sources
+
+    selected = look_sources.resolve(source, active_jobs)
+    kind = "watch" if kind == "watch" else "face"
+    settings = normalize(current() if s is None else s)
+    fl = filters(settings)
+    r = config.load()["render"]
+    W, H = r["width"], r["height"]
+    stat = selected.image.stat()
+    identity = [str(selected.image), stat.st_mtime_ns, stat.st_size, W, H]
+    digest = lambda value: hashlib.sha256(json.dumps(value, sort_keys=True).encode()).hexdigest()[:24]
+    d = _preview_dir()
+    original = d / f"source_{digest(identity)}_original.jpg"
+    # 滤镜算法变化时，同一组滑块也要重新计算，不能继续显示旧的偏色预览。
+    beauty = d / f"source_{digest([identity, selected.normalization, settings, kind, fl])}_beauty.jpg"
+    base = f"scale={W}:{H}:flags=lanczos"
+    show = "scale=720:1280:flags=lanczos"
+    if not original.is_file():
+        _ff(["-i", str(selected.image), "-frames:v", "1", "-vf", f"{base},{show}", "-q:v", "2", str(original)])
+    if not beauty.is_file():
+        chain = base
+        if fl["normalize"] and selected.normalization:
+            chain += "," + selected.normalization
+        if kind == "watch" and fl["sharpen"]:
+            chain += "," + fl["sharpen"]
+        if fl["tone"]:
+            chain += "," + fl["tone"]
+        if chain == base and (kind != "face" or not fl["smooth"]):
+            shutil.copyfile(original, beauty)
+        elif kind == "face" and fl["smooth"]:
+            from . import skin
+
+            skin.still(["-i", str(selected.image), "-vf", chain],
+                       ["-vf", show, "-q:v", "2", str(beauty)], W, H, fl["smooth"])
+        else:
+            _ff(["-i", str(selected.image), "-frames:v", "1", "-vf", f"{chain},{show}", "-q:v", "2", str(beauty)])
+    return {"kind": kind, "original": original.name, "beauty": beauty.name,
+            "frames": ["face", "watch"], "index": 0, "count": 1,
+            "source": selected.origin, "fallback": selected.fallback}

@@ -3,7 +3,8 @@
 
 paths:
   material_root: "D:/巨航/素材/素材"      # 素材根目录，下面按拍摄日期分文件夹（9.23、9.25 …）
-  data_root: "D:/巨航/workbench/data"     # 识别结果、剪辑脚本、配音、成片都放这里
+  data_root: "D:/巨航/workbench/data"     # 识别结果、剪辑脚本、配音等工作数据
+  output_root: "D:/巨航/outputs"          # 成片库直接读取这里，项目成片按项目名分文件夹
   ffmpeg: "D:/oopz/ffmpeg.exe"            # Linux 上写 ffmpeg
   cosyvoice_repo: "D:/jhwb/third_party/CosyVoice"    # 同上，走英文路径的目录链接
 
@@ -74,8 +75,9 @@ tts:
     api_key_env: "JH_AZURE_TTS_KEY"
 
 render:
-  slip_trim: "audio"                      # 口误怎么处理：audio = 只删声音（换成环境底噪），画面不剪；cut = 画面一起剪（跳剪）
-  segment_gap: {first_lead: 0.02, lead: 0.02, tail: 0.02}   # 片段之间：说完最后一个字留 0.02 秒、下一段开口前留 0.02 秒；成片开头开口前留 0.02 秒（直接说话开场）
+  slip_trim: "audio"                      # 口误怎么处理：audio = 只删声音（换成底噪）；cut = 画面一起剪；超过 1 秒无人声时两种模式都会裁画面
+  segment_gap: {first_lead: 0.02, lead: 0.02, tail: 0.02, final_tail: 0.1}   # 普通切点前后各留 0.02 秒；成片最后一个字后留 0.1 秒
+  silence_cut: {threshold: 1.0}            # 段内超过 1 秒无人声时同步裁掉音画，中间切点仍前后各留 0.02 秒
   width: 1440
   height: 2560
   fps: 60

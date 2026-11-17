@@ -24,7 +24,7 @@ import { Empty, EmptyDescription, EmptyHeader, EmptyMedia, EmptyTitle } from "@/
 import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useJobs } from "@/hooks/use-jobs"
-import { go, type BatchTab } from "@/hooks/use-route"
+import { followTask, getRoute, go, type BatchTab } from "@/hooks/use-route"
 import { api, urls, type Batch, type Clip, type DubItem, type Script, type Transcript, type TtsEngine } from "@/lib/api"
 import { minutes, mmss, shortClip, tsec } from "@/lib/format"
 import { cn } from "@/lib/utils"
@@ -70,22 +70,28 @@ export function BatchPage({ batch, tab }: { batch: string; tab: BatchTab }) {
     load().catch((e) => toast.error("加载失败", { description: String(e) }))
   }, [load, version])
 
-  const running = active.some((j) => j.title.startsWith(batch))
+  const running = queue.busy || active.some((j) => j.title.startsWith(batch))
 
   async function generate() {
+    const source = getRoute()
     const j = await api.generate(batch)
     toast("已开始：先识别，再出脚本", { description: "识别完会自动让大模型出脚本，出完停下来等你审核" })
     watch(j, (job) => toast.success(`脚本已生成，共 ${(job.result as string[]).length} 条`, { description: "逐条审核后再出片" }))
+    followTask(source, batch, j.id)
   }
   async function transcribe() {
+    const source = getRoute()
     const j = await api.transcribe(batch)
     toast("已开始识别")
     watch(j, () => toast.success("识别完成"))
+    followTask(source, batch, j.id)
   }
   async function autoRun() {
+    const source = getRoute()
     const j = await api.auto(batch)
     toast("一键出片已开始", { description: "识别 → 出脚本 → 全部出片，进度看右下角" })
     watch(j, (job) => toast.success(`一键出片完成，共 ${(job.result as string[]).length} 条成片`))
+    followTask(source, batch, j.id)
   }
   async function dubFull(clips?: string[], engine = dubEngine) {
     let j
@@ -97,14 +103,17 @@ export function BatchPage({ batch, tab }: { batch: string; tab: BatchTab }) {
     toast("整条转粤语已开始", { description: "识别 → 翻译 → 分离背景音乐 → 克隆原声配音 → 换字幕，1 分钟的视频约 3 分钟" })
     watch(j, (job) => {
       toast.success(`粤语版好了，共 ${(job.result as string[]).length} 条`)
-      go({ page: "batch", batch, tab: "dub" })
+      const visible = getRoute()
+      if (visible.page === "batch" && visible.batch === batch) go({ page: "batch", batch, tab: "dub" })
       load().catch(() => {})
     })
   }
   async function renderAll() {
+    const source = getRoute()
     const list = await api.renderAll(batch)
     toast(`已加入 ${list.length} 条出片任务`)
     list.forEach((j) => watch(j, (job) => toast.success(`${job.title} 完成`)))
+    if (list.length) followTask(source, batch, list[0].id)
   }
 
   if (missing) return <ProjectMissing kind="batch" name={batch} />
@@ -196,7 +205,7 @@ export function BatchPage({ batch, tab }: { batch: string; tab: BatchTab }) {
             </AlertDialogContent>
           </AlertDialog>
           {!scripts.length ? (
-            <Button size="lg" className="gold-gradient shine px-4 font-bold shadow-lg shadow-primary/25" onClick={generate} disabled={running || !b.clips || queue.busy}>
+            <Button size="lg" className="px-4 font-bold" onClick={generate} disabled={running || !b.clips || queue.busy} aria-busy={running && !queue.busy}>
               {running ? <Loader2 className="animate-spin" /> : <Sparkles />}一键识别并出脚本
             </Button>
           ) : pending ? (
@@ -204,7 +213,7 @@ export function BatchPage({ batch, tab }: { batch: string; tab: BatchTab }) {
               <RegenerateButton onConfirm={generate} disabled={running} />
               <AlertDialog>
                 <AlertDialogTrigger asChild>
-                  <Button size="lg" className="gold-gradient shine px-4 font-bold shadow-lg shadow-primary/25"><Play />全部出片（{pending} 条）</Button>
+                  <Button size="lg" className="px-4 font-bold"><Play />全部出片（{pending} 条）</Button>
                 </AlertDialogTrigger>
                 <AlertDialogContent>
                   <AlertDialogHeader>
@@ -342,7 +351,7 @@ function DubList({ batch, dubs, running, onRedo }: { batch: string; dubs: DubIte
             </div>
             <div className="text-xs text-muted-foreground tabular">{mmss(d.duration)} · {d.sentences} 句 · {(d.size / 2 ** 20).toFixed(0)} MB{d.max_speed > 1.01 ? ` · 最快 ${d.max_speed}×` : ""}{d.min_speed && d.min_speed < 0.99 ? ` · 最慢 ${d.min_speed}×` : ""}</div>
             <div className="flex gap-2">
-              <Button size="sm" asChild className="gold-gradient font-semibold"><a href={urls.output(batch, d.id)} download={`${d.id}.mp4`}><Download />下载</a></Button>
+              <Button size="sm" asChild className="font-semibold"><a href={urls.output(batch, d.id)} download={`${d.id}.mp4`}><Download />下载</a></Button>
               <Button size="sm" variant="outline" disabled={running} onClick={() => onRedo(d.clip, d.engine ?? "ming")}><RefreshCw />重新转</Button>
             </div>
           </div>
@@ -399,9 +408,11 @@ function ScriptGrid({ batch, scripts }: { batch: string; scripts: Script[] }) {
     )
   }
   async function render(id: string) {
+    const source = getRoute()
     const j = await api.render(batch, id)
     toast("已加入出片队列")
     watch(j, () => toast.success(`${id} 出片完成`))
+    followTask(source, batch, j.id)
   }
   return (
     <Stagger className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-4">

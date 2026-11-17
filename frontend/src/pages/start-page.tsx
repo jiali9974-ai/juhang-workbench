@@ -1,58 +1,51 @@
 // 首页：一个上传框。拖入视频或整个文件夹 → 传完点「开始生成」→ 进入生成页。
-import { useCallback, useEffect, useRef, useState } from "react"
-import { ArrowRight, Check, CircleAlert, FileVideo, FolderInput, FolderUp, Loader2, UploadCloud, X } from "lucide-react"
+import { useCallback, useRef, useState } from "react"
+import { Check, CircleAlert, FileVideo, FolderUp, Loader2, X } from "lucide-react"
 import { AnimatePresence, motion } from "motion/react"
 import { toast } from "sonner"
 
 import { ease } from "@/components/motion"
 import { useUploadQueue } from "@/components/upload-queue"
 import { Button } from "@/components/ui/button"
-import { Input } from "@/components/ui/input"
 import { useJobs } from "@/hooks/use-jobs"
-import { go } from "@/hooks/use-route"
-import { api, type Batch, type Job } from "@/lib/api"
+import { followTask, getRoute, go } from "@/hooks/use-route"
+import { api, type Job } from "@/lib/api"
 import { setCurrent, todayName } from "@/lib/current"
 import { filesFromDrop, fmtSize, folderOf, isVideo, VIDEO_ACCEPT } from "@/lib/upload"
 import { cn } from "@/lib/utils"
+import { useSessionState } from "@/hooks/use-session-state"
+import { uploadTasks } from "@/lib/upload-tasks"
 
 const msg = (e: unknown) => String(e).replace(/^Error: /, "")
+const homeCreation: { promise: Promise<string> | null; name: string | null } = { promise: null, name: null }
 
 export function StartPage() {
-  const { jobs, watch } = useJobs()
-  const [batch, setBatch] = useState<string | null>(null)
+  const { watch } = useJobs()
   const [clips, setClips] = useState(0)               // 项目里已经有的视频数
-  const [projects, setProjects] = useState<Batch[]>([])
   const [over, setOver] = useState(false)
-  const [showPath, setShowPath] = useState(false)
-  const [path, setPath] = useState("")
-  const [importId, setImportId] = useState<string | null>(null)
-  const [starting, setStarting] = useState(false)
-  const creating = useRef<Promise<string> | null>(null)
-  const creatingName = useRef<string | null>(null)
+  const [starting, setStarting] = useSessionState("home.starting", false)
   const fileRef = useRef<HTMLInputElement | null>(null)
   const folderRef = useRef<HTMLInputElement | null>(null)
 
-  useEffect(() => { api.batches().then(setProjects).catch(() => {}) }, [])
 
   const refresh = useCallback(() => {
     window.dispatchEvent(new Event("jh:refresh"))
     api.batches().then((list) => {
-      setProjects(list)
-      const b = list.find((x) => x.batch === creatingName.current)
+      const b = list.find((x) => x.batch === (homeCreation.name ?? uploadTasks.getSnapshot("home").batch))
       if (b) setClips(b.clips)
     }).catch(() => {})
   }, [])
-  const queue = useUploadQueue(batch ?? "", refresh)
+  const queue = useUploadQueue("", refresh, "home")
+  const batch = queue.batch
 
   /** 第一次加素材时才建项目：只拖了一个文件夹就用文件夹名，否则用今天的日期；重名自动加 _2、_3 */
-  async function createProject(hint: string | null, folder?: string): Promise<{ batch: string; job: Job | null }> {
+  async function createProject(hint: string | null): Promise<{ batch: string; job: Job | null }> {
     const base = (hint || todayName()).trim()
     for (let i = 1; i <= 50; i++) {
       const name = i === 1 ? base : `${base}_${i}`
       try {
-        const r = await api.createBatch(name, folder)
-        creatingName.current = r.batch
-        setBatch(r.batch)
+        const r = await api.createBatch(name)
+        homeCreation.name = r.batch
         return r
       } catch (e) {
         if (!msg(e).includes("已经有叫")) throw e
@@ -61,11 +54,11 @@ export function StartPage() {
     throw new Error("同名项目太多了，换个文件夹名再试")
   }
   function ensureProject(hint: string | null): Promise<string> {
-    if (!creating.current) {
-      creating.current = createProject(hint).then((r) => r.batch)
-      creating.current.catch(() => { creating.current = null })
+    if (!homeCreation.promise) {
+      homeCreation.promise = createProject(hint).then((r) => r.batch)
+      homeCreation.promise.catch(() => { homeCreation.promise = null })
     }
-    return creating.current
+    return homeCreation.promise
   }
 
   async function addFiles(files: File[], folder: string | null) {
@@ -80,50 +73,25 @@ export function StartPage() {
     }
   }
 
-  // 本机路径加载：同一块硬盘用硬链接，几十 GB 也是秒加
-  async function importPath() {
-    const p = path.trim().replace(/^"|"$/g, "")
-    if (!p) return toast.error("请填写本机文件夹路径")
-    try {
-      let job: Job | null
-      if (creating.current) {
-        job = await api.importFolder(await creating.current, p)
-      } else {
-        const name = p.replace(/[\\/]+$/, "").split(/[\\/]/).pop() || null
-        const r = createProject(name, p)
-        creating.current = r.then((x) => x.batch)
-        job = (await r).job
-      }
-      if (!job) return
-      setImportId(job.id)
-      setShowPath(false)
-      setPath("")
-      watch(job, (j) => {
-        const r = j.result as { added: number; linked: number; total: number }
-        toast.success(`已加载 ${r.added} 个视频`, { description: r.linked ? `${r.linked} 个用硬链接，没有占用额外硬盘空间` : undefined })
-        refresh()
-      })
-    } catch (e) {
-      toast.error("加载失败", { description: msg(e) })
-    }
-  }
-
-  const importJob = importId ? jobs.find((j) => j.id === importId) : undefined
-  const importing = !!importId && (!importJob || importJob.status === "queued" || importJob.status === "running")
   const done = queue.items.filter((x) => x.status === "done").length
   const total = Math.max(clips, done)
-  const ready = !!batch && !queue.busy && !importing && total > 0
+  const ready = !!batch && !queue.busy && total > 0
 
   async function start() {
     if (!batch) return
+    const source = getRoute()
     setStarting(true)
     try {
       const j = await api.auto(batch)
       watch(j, (job) => toast.success(`「${batch}」生成完成，共 ${(job.result as string[]).length} 条成片`))
       setCurrent(batch)
-      go({ page: "gen", batch })
+      queue.reset()
+      homeCreation.promise = null
+      homeCreation.name = null
+      followTask(source, batch, j.id)
     } catch (e) {
       toast.error("没法开始", { description: msg(e) })
+    } finally {
       setStarting(false)
     }
   }
@@ -132,37 +100,16 @@ export function StartPage() {
   const loaded = queue.items.reduce((a, x) => a + (x.status === "done" ? x.file.size : x.loaded), 0)
 
   return (
-    <div className="flex min-h-svh flex-col bg-background">
-      <header className="flex items-center justify-between px-6 py-5">
-        <div className="flex items-center gap-2.5 text-[15px] font-semibold">
-          <span className="grid size-7 place-items-center rounded-lg bg-foreground text-[13px] font-bold text-background">巨</span>
-          巨航剪辑工作台
-        </div>
-        {projects.length > 0 && (
-          <button onClick={() => go({ page: "projects" })} className="group flex items-center gap-1 text-sm text-muted-foreground transition-colors hover:text-foreground">
-            我的项目<span className="tabular">（{projects.length}）</span>
-            <ArrowRight className="size-3.5 transition-transform group-hover:translate-x-0.5" />
-          </button>
-        )}
-      </header>
-
-      <main className="mx-auto flex w-full max-w-2xl flex-1 flex-col justify-center px-6 pb-24">
+    <div className="flex min-h-svh flex-col bg-background pt-17">
+      <main className="mx-auto flex w-full max-w-4xl flex-1 flex-col px-6 pt-10 pb-24 md:pt-12">
         <motion.h1
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5, ease }}
-          className="text-center text-4xl font-bold tracking-tight md:text-5xl"
+          className="mt-auto text-center text-4xl font-bold tracking-tight md:text-5xl"
         >
           上传素材
         </motion.h1>
-        <motion.p
-          initial={{ opacity: 0 }}
-          animate={{ opacity: 1 }}
-          transition={{ duration: 0.5, delay: 0.1 }}
-          className="mt-3 text-center text-muted-foreground"
-        >
-          拖入视频或整个文件夹，传完点「开始生成」，自动剪成竖屏短视频
-        </motion.p>
 
         {/* 上传框 */}
         <motion.div
@@ -182,18 +129,11 @@ export function StartPage() {
             filesFromDrop(e.dataTransfer).then(({ files, folder }) => addFiles(files, folder))
           }}
           className={cn(
-            "mt-10 grid cursor-pointer place-items-center rounded-3xl border-2 border-dashed px-6 py-14 text-center transition-all duration-200 outline-none focus-visible:ring-2 focus-visible:ring-foreground/30",
+            "mt-10 flex min-h-72 cursor-pointer flex-col items-center justify-center rounded-3xl border-2 border-dashed px-6 py-12 text-center transition-all duration-200 outline-none focus-visible:ring-2 focus-visible:ring-foreground/30 md:min-h-88",
             over ? "scale-[1.01] border-foreground bg-muted/70" : "border-border bg-muted/25 hover:border-foreground/30 hover:bg-muted/50",
           )}
         >
-          <motion.div
-            animate={over ? { y: -6, scale: 1.08 } : { y: 0, scale: 1 }}
-            className="grid size-14 place-items-center rounded-full bg-background text-foreground shadow-sm ring-1 ring-foreground/10"
-          >
-            <UploadCloud className="size-6" />
-          </motion.div>
-          <div className="mt-4 text-lg font-semibold">{over ? "松开开始上传" : "拖到这里上传"}</div>
-          <div className="mt-1 text-sm text-muted-foreground">支持 .mov / .mp4 / .m4v，手机原片直接传，文件夹里的子文件夹也会一起传</div>
+          <div className="text-lg font-semibold">{over ? "松开开始上传" : "拖到这里上传"}</div>
           <div className="mt-5 flex flex-wrap justify-center gap-2" onClick={(e) => e.stopPropagation()}>
             <Button variant="outline" className="rounded-full bg-background" onClick={() => fileRef.current?.click()}>
               <FileVideo />选择视频
@@ -225,7 +165,7 @@ export function StartPage() {
 
         {/* 上传进度 */}
         <AnimatePresence initial={false}>
-          {(queue.items.length > 0 || importing) && (
+          {queue.items.length > 0 && (
             <motion.div
               initial={{ opacity: 0, height: 0 }}
               animate={{ opacity: 1, height: "auto" }}
@@ -236,17 +176,17 @@ export function StartPage() {
               <div className="mt-5 rounded-2xl border bg-background">
                 <div className="flex items-center justify-between gap-3 px-4 pt-3 text-sm">
                   <span className="font-medium">
-                    {importing ? (importJob?.message || "正在加载文件夹…") : queue.busy ? `上传中 ${done}/${queue.items.length}` : `已上传 ${done} 个视频`}
+                    {queue.busy ? `上传中 ${done}/${queue.items.length}` : `已上传 ${done} 个视频`}
                   </span>
                   <span className="text-xs text-muted-foreground tabular">
-                    {importing ? `${Math.round((importJob?.progress ?? 0) * 100)}%` : `${fmtSize(loaded)} / ${fmtSize(bytes)}`}
+                    {fmtSize(loaded)} / {fmtSize(bytes)}
                   </span>
                 </div>
                 <div className="mx-4 mt-2 mb-3 h-1 overflow-hidden rounded-full bg-muted">
                   <motion.div
                     className="h-full rounded-full bg-foreground"
                     initial={false}
-                    animate={{ width: `${(importing ? importJob?.progress ?? 0 : bytes ? loaded / bytes : 0) * 100}%` }}
+                    animate={{ width: `${(bytes ? loaded / bytes : 0) * 100}%` }}
                     transition={{ duration: 0.3 }}
                   />
                 </div>
@@ -276,42 +216,33 @@ export function StartPage() {
           )}
         </AnimatePresence>
 
-        {/* 开始 */}
-        <div className="mt-8 flex flex-col items-center gap-3">
-          <Button
-            size="lg"
-            disabled={!ready || starting}
-            onClick={start}
-            className="h-12 rounded-full bg-foreground px-9 text-base text-background hover:bg-foreground/85"
-          >
-            {starting ? <Loader2 className="animate-spin" /> : null}开始生成{!starting && <ArrowRight />}
-          </Button>
-          <span className="text-xs text-muted-foreground">
-            {!batch ? "先上传素材"
-              : queue.busy || importing ? "上传完就可以开始"
-              : total ? `项目「${batch}」· ${total} 个视频已就绪 · 自动识别 → 出脚本 → 出片`
-              : "还没有传成功的视频"}
-          </span>
-        </div>
-
-        {/* 本机文件夹路径（大素材更快） */}
-        <div className="mt-8 text-center">
-          {!showPath ? (
-            <button onClick={() => setShowPath(true)} className="inline-flex items-center gap-1.5 text-xs text-muted-foreground underline-offset-4 hover:text-foreground hover:underline">
-              <FolderInput className="size-3.5" />素材就在这台电脑上？填文件夹路径直接加载，不用上传
-            </button>
-          ) : (
-            <motion.div initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} className="flex gap-2">
-              <Input
-                autoFocus
-                value={path}
-                onChange={(e) => setPath(e.target.value)}
-                onKeyDown={(e) => { if (e.key === "Enter") importPath(); if (e.key === "Escape") setShowPath(false) }}
-                placeholder="例如 D:\巨航\素材\素材\9.29"
-                className="rounded-full font-mono text-xs"
-              />
-              <Button variant="outline" className="shrink-0 rounded-full" onClick={importPath}><FolderInput />加载</Button>
-            </motion.div>
+        {/* 工作台 / 开始 */}
+        <div className="mt-auto flex shrink-0 flex-col items-center gap-3 pt-12 text-center">
+          <div className="flex items-center justify-center gap-3">
+            <Button
+              variant="outline"
+              size="lg"
+              onClick={() => go({ page: "gen" })}
+              className="h-12 min-w-32 rounded-full px-6 text-base sm:min-w-36"
+            >
+              工作台
+            </Button>
+            <Button
+              size="lg"
+              disabled={!ready || starting}
+              aria-busy={starting}
+              onClick={start}
+              className="h-12 min-w-32 rounded-full px-6 text-base sm:min-w-36"
+            >
+              {starting ? <Loader2 className="animate-spin" /> : null}开始生成
+            </Button>
+          </div>
+          {batch && (
+            <span className="text-xs text-muted-foreground">
+              {queue.busy ? "上传完就可以开始"
+                : total ? `项目「${batch}」· ${total} 个视频已就绪 · 自动识别 → 出脚本 → 出片`
+                : "还没有传成功的视频"}
+            </span>
           )}
         </div>
       </main>

@@ -102,7 +102,7 @@ function PresenterCard() {
         <p className="text-xs text-muted-foreground">所有口播带货视频都由这位主播出镜，像店里固定的主播。换主播只影响之后新出的方案。</p>
         {editing && <Textarea value={prompt} onChange={(e) => setPrompt(e.target.value)} rows={3} className="text-xs leading-relaxed" placeholder="描述主播的长相、年龄、发型、服装、所在场景" />}
         <div className="flex flex-wrap gap-2">
-          <Button size="sm" variant="outline" disabled={busy} onClick={() => (editing ? generate() : setEditing(true))}>
+          <Button size="sm" variant="outline" disabled={busy} aria-busy={busy} onClick={() => (editing ? generate() : setEditing(true))}>
             {busy ? <Loader2 className="animate-spin" /> : <Wand2 />}{editing ? "按描述生成" : pr ? "换一个主播" : "生成主播"}
           </Button>
           {editing && <Button size="sm" variant="ghost" onClick={() => { setPrompt(data?.default_prompt || ""); }}>恢复默认描述</Button>}
@@ -241,10 +241,10 @@ export function TvcHome() {
           </label>
           {style === "presenter" && <PresenterCard />}
           <div className="mt-1 flex flex-wrap gap-2">
-            <Button size="lg" className="gold-gradient shine font-bold" disabled={busy} onClick={() => start("keyframes")}>
+            <Button size="lg" className="font-bold" disabled={busy} aria-busy={busy} onClick={() => start("keyframes")}>
               {busy ? <Loader2 className="animate-spin" /> : <Wand2 />}生成分镜（先审核）
             </Button>
-            <Button size="lg" variant="outline" disabled={busy} onClick={() => start("final")}><Rocket />一键直接出片</Button>
+            <Button size="lg" variant="outline" disabled={busy} aria-busy={busy} onClick={() => start("final")}><Rocket />一键直接出片</Button>
             <span className="self-center text-xs text-muted-foreground">{S.time}</span>
           </div>
         </div>

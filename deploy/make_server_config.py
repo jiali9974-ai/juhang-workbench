@@ -15,6 +15,7 @@ APP = Path(os.environ.get("JH_APP", BASE / "app"))
 
 # 本机路径前缀 → 服务器路径（长的放前面先匹配）
 PREFIXES = [
+    ("D:/巨航/outputs", str(BASE / "data" / "outputs")),
     ("D:/巨航/workbench/data", str(BASE / "data")),
     ("D:/巨航/workbench/models", str(BASE / "models")),
     ("D:/jhwb/models", str(BASE / "models")),
@@ -39,7 +40,7 @@ def _fix(v):
 def main() -> None:
     cfg = yaml.safe_load((APP / "config.yaml").read_text(encoding="utf-8"))
     cfg = _fix(cfg)
-    cfg["paths"].update(material_root=str(BASE / "materials"), data_root=str(BASE / "data"),
+    cfg["paths"].update(material_root=str(BASE / "materials"), data_root=str(BASE / "data"), output_root=str(BASE / "data" / "outputs"),
                         ffmpeg="/usr/bin/ffmpeg", cosyvoice_repo="")
     cfg["asr"]["device"] = "cpu"
     cfg["render"]["encoder"] = "libx264"

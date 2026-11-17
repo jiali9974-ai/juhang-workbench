@@ -355,7 +355,7 @@ export function AppSidebar({ route }: { route: Route }) {
           </label>
           <AlertDialogFooter>
             <AlertDialogCancel disabled={newBatch.busy}>取消</AlertDialogCancel>
-            <AlertDialogAction disabled={newBatch.busy} onClick={(e) => { e.preventDefault(); createBatch() }}>
+            <AlertDialogAction disabled={newBatch.busy} aria-busy={newBatch.busy} onClick={(e) => { e.preventDefault(); createBatch() }}>
               {newBatch.busy && <Loader2 className="animate-spin" />}新建
             </AlertDialogAction>
           </AlertDialogFooter>

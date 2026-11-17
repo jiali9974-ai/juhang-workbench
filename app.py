@@ -12,8 +12,10 @@ from pathlib import Path
 import uvicorn
 from fastapi import Body, FastAPI, HTTPException, Request
 from fastapi.responses import FileResponse, HTMLResponse
+from pydantic import BaseModel, Field
+from starlette.background import BackgroundTask
 
-from jh import asr, config, media, render, script as scriptmod, tts
+from jh import asr, config, deletion, media, outputs, render, script as scriptmod, tts
 from jh.jobs import JobQueue
 
 app = FastAPI(title="巨航剪辑工作台")
@@ -95,8 +97,7 @@ def batches():
         clips = media.list_clips(d)
         done = sum((_transcript_dir(d.name) / f"{c.stem}.json").exists() for c in clips)
         scripts = scriptmod.list_scripts(d.name)
-        outputs = list((config.data_root() / "outputs" / d.name).glob("*.mp4")) \
-            if (config.data_root() / "outputs" / d.name).exists() else []
+        outputs = list((config.output_root() / d.name).glob("*.mp4"))
         cache = config.data_root() / "clipinfo" / f"{d.name}.json"
         total = sum(json.loads(cache.read_text(encoding="utf-8")).values()) if cache.exists() else None
         out.append({"batch": d.name, "clips": len(clips), "transcribed": done, "total_seconds": total,
@@ -174,7 +175,10 @@ def thumb(batch: str, clip: str, t: float = 1.0):
 
 @app.get("/api/output_thumb/{batch}/{sid}.jpg")
 def output_thumb(batch: str, sid: str):
-    src = config.data_root() / "outputs" / batch / f"{sid}.mp4"
+    try:
+        src = outputs.output_path(batch, sid)
+    except ValueError:
+        raise HTTPException(404)
     if not src.exists():
         raise HTTPException(404)
     cover = src.with_name(f"{sid}_封面.jpg")
@@ -318,6 +322,7 @@ def generate(batch: str):
 
     def run(p):
         ts = asr.transcribe_folder(folder, _transcript_dir(batch), p)
+        p.set_stage("script")
         p(0, 1, "大模型出剪辑脚本中")
         scripts = scriptmod.generate(batch, ts, p)
         scriptmod.archive_batch(batch)   # 旧脚本和旧成片挪去 _old_时间 目录，不删除
@@ -335,7 +340,7 @@ def generate(batch: str):
 def scripts(batch: str):
     res = []
     for s in scriptmod.list_scripts(batch):
-        out = config.data_root() / "outputs" / batch / f"{s['id']}.mp4"
+        out = config.output_root() / batch / f"{s['id']}.mp4"
         res.append({**s, "duration": round(scriptmod.total_duration(s), 1),
                     "resolved_voice": scriptmod.resolved_voice_mode(s), "has_output": out.exists()})
     return res
@@ -362,7 +367,7 @@ def render_script(batch: str, sid: str):
     s = scriptmod.load(batch, sid)
 
     def run(p):
-        out = render.render(s, p)
+        out = render.render(s, p, on_stage=p.set_stage)
         s2 = scriptmod.load(batch, sid)
         s2["status"] = "rendered"
         scriptmod.save(s2)
@@ -406,10 +411,17 @@ def look_preview(data: dict = Body(...)):
     """出一组对比图（原片 / 按当前滑块设置美颜后），kind = face（人脸）或 watch（手表特写）。"""
     from jh import look
 
-    batch = str(data.get("batch") or "")
-    _batch_dir(batch)
     try:
+        if "source" in data or not data.get("batch"):
+            return look.preview_source(data.get("source"), str(data.get("kind") or "face"),
+                                       data.get("settings"), jobs.list())
+        batch = str(data["batch"])
+        _batch_dir(batch)
         return look.preview(batch, str(data.get("kind") or "face"), data.get("settings"), int(data.get("index") or 0))
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
+    except (ValueError, TypeError) as e:
+        raise HTTPException(400, str(e))
     except RuntimeError as e:
         raise HTTPException(400, str(e))
 
@@ -447,6 +459,7 @@ def auto(batch: str):
 
     def run(p):
         ts = asr.transcribe_folder(folder, _transcript_dir(batch), lambda i, n, m: p(i, n * 3, f"识别 {m}"))
+        p.set_stage("script")
         p(1, 3, "大模型出剪辑脚本中")
         scripts = scriptmod.generate(batch, ts, lambda i, n, m: p(1 + (i / n if n else 0), 3, m))
         scriptmod.archive_batch(batch)
@@ -457,7 +470,7 @@ def auto(batch: str):
         for i, s in enumerate(scripts):
             def sub(j, n, m, i=i):
                 p(2 * len(scripts) + i * 1 + (j / n if n else 0), 3 * len(scripts), f"第 {i + 1}/{len(scripts)} 条：{m}")
-            outs.append(str(render.render(s, sub)))
+            outs.append(str(render.render(s, sub, on_stage=p.set_stage)))
             s2 = scriptmod.load(batch, s["id"])
             s2["status"] = "rendered"
             scriptmod.save(s2)
@@ -467,9 +480,77 @@ def auto(batch: str):
     return jobs.submit("auto", f"{batch} 一键出片", run).to_dict()
 
 
+class OutputSelection(BaseModel):
+    batch: str = ""
+    id: str = Field(min_length=1)
+
+
+class ExportSelection(BaseModel):
+    items: list[OutputSelection] = Field(min_length=1)
+
+
+@app.get("/api/outputs")
+def all_outputs():
+    return outputs.list_outputs(jobs.list(10000))
+
+
+@app.get("/api/root_output_thumb/{sid}.jpg")
+def root_output_thumb(sid: str):
+    return output_thumb("", sid)
+
+
+@app.get("/api/root_outputs/{sid}.mp4")
+def root_output(sid: str):
+    return output("", sid)
+
+
+@app.delete("/api/root_outputs/{sid}")
+def delete_root_output(sid: str):
+    return delete_output("", sid)
+
+
+@app.post("/api/outputs/export")
+def export_outputs(data: ExportSelection):
+    try:
+        token = outputs.export_outputs([(item.batch, item.id) for item in data.items], jobs.list(10000))
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"url": f"/api/exports/{token}.zip"}
+
+
+@app.delete("/api/outputs/{batch}/{sid}")
+def delete_output(batch: str, sid: str):
+    try:
+        outputs.delete_output(batch, sid, jobs.list(10000))
+    except FileNotFoundError as e:
+        raise HTTPException(404, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    except RuntimeError as e:
+        raise HTTPException(409, str(e))
+    return {"ok": True}
+
+
+@app.get("/api/exports/{token}.zip")
+def download_export(token: str):
+    try:
+        path = outputs.export_path(token)
+    except ValueError:
+        raise HTTPException(404)
+    if not path.is_file():
+        raise HTTPException(404, "导出文件已过期，请重新导出")
+    return FileResponse(path, media_type="application/zip", filename="成片.zip",
+                        background=BackgroundTask(path.unlink, missing_ok=True))
+
+
 @app.get("/api/outputs/{batch}/{sid}.mp4")
 def output(batch: str, sid: str):
-    f = config.data_root() / "outputs" / batch / f"{sid}.mp4"
+    try:
+        f = outputs.output_path(batch, sid)
+    except ValueError:
+        raise HTTPException(404)
     if not f.exists():
         raise HTTPException(404)
     return FileResponse(f, media_type="video/mp4", filename=f"{sid}.mp4")
@@ -784,14 +865,7 @@ def list_dubs(batch: str):
     return sorted(out, key=lambda x: -x["updated"])
 
 
-# ---------------- 删除项目（挪进回收站，可以恢复） ----------------
-
-def _recycle_dir(kind: str, name: str) -> Path:
-    import time
-
-    d = config.data_root() / "_recycle" / f"{kind}_{name}_{time.strftime('%Y%m%d_%H%M%S')}"
-    d.mkdir(parents=True)
-    return d
+# ---------------- 直接删除项目 ----------------
 
 
 def _busy_with(name: str) -> bool:
@@ -800,40 +874,40 @@ def _busy_with(name: str) -> bool:
 
 @app.delete("/api/batches/{batch}")
 def delete_batch(batch: str):
-    """删除素材剪辑项目：原始视频、识别结果、脚本、成片一起挪进 data/_recycle/，同一硬盘上瞬间完成，可以挪回来恢复。"""
-    import shutil
-
-    d = _batch_dir(batch)
+    """直接删除项目的素材、识别结果、脚本和成片。"""
+    try:
+        d = deletion.child_path(config.material_root(), batch)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    if not d.is_dir():
+        raise HTTPException(404, f"找不到批次 {batch}")
     if _busy_with(batch):
         raise HTTPException(409, "这个项目还有任务在跑，等跑完再删")
-    rb = _recycle_dir("素材剪辑", batch)
-    shutil.move(str(d), str(rb / "素材"))
     root = config.data_root()
-    for sub in ("transcripts", "scripts", "outputs", "renders", "preview", "thumbs", "voice_refs"):
-        src = root / sub / batch
-        if src.exists():
-            shutil.move(str(src), str(rb / sub))
-    info = root / "clipinfo" / f"{batch}.json"
-    if info.exists():
-        shutil.move(str(info), str(rb / "clipinfo.json"))
-    return {"ok": True, "recycled_to": str(rb)}
+    targets = [(config.material_root(), batch), (config.output_root(), batch)]
+    targets.extend((root / sub, batch) for sub in ("transcripts", "scripts", "renders", "preview", "thumbs", "voice_refs", "dub"))
+    targets.append((root / "clipinfo", f"{batch}.json"))
+    try:
+        deletion.delete_children(targets)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"ok": True}
 
 
 @app.delete("/api/tvc/{pid}")
 def delete_tvc(pid: str):
-    """删除产品图生视频项目：整个项目文件夹挪进 data/_recycle/，可以恢复。"""
-    import shutil
-
-    from jh import tvc
-
-    d = tvc.pdir(pid)
+    """直接删除产品图、方案、分镜、视频段和成片。"""
+    root = config.data_root() / "tvc"
+    try:
+        d = deletion.child_path(root, pid)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
     if not d.is_dir():
         raise HTTPException(404, "找不到项目")
     if any(j["status"] in ("queued", "running") and j["kind"] == "tvc" for j in jobs.list(200)):
         raise HTTPException(409, "产品图生视频还有任务在跑，等跑完再删")
-    rb = _recycle_dir("产品图生视频", pid)
-    shutil.move(str(d), str(rb / "项目"))
-    return {"ok": True, "recycled_to": str(rb)}
+    deletion.delete_children([(root, pid)])
+    return {"ok": True}
 
 
 

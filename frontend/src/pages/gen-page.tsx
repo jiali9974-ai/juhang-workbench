@@ -1,304 +1,184 @@
-// 生成页：左边是进度和成片列表（文字），右边是选中那条的视频；还没有成片时右边是素材缩略图。
-import { useCallback, useEffect, useState } from "react"
-import { Check, CircleAlert, Download, Loader2, PencilLine, Play, Plus, RotateCcw, Settings2, Sparkles } from "lucide-react"
-import { motion } from "motion/react"
+// 成片画廊：展示所有项目的成片，勾选后批量导出或删除。
+import { useEffect, useState } from "react"
+import { Check, Download, Film, Loader2, Play, Plus, Trash2, X } from "lucide-react"
+import { Dialog } from "radix-ui"
 import { toast } from "sonner"
 
-import { ProjectMissing } from "@/components/delete-project"
-import { FeaturePanel, MediaImage, MediaMosaic, MediaVideo, type PanelItem } from "@/components/feature-panel"
-import { ease } from "@/components/motion"
 import { Button } from "@/components/ui/button"
 import { useJobs } from "@/hooks/use-jobs"
 import { go } from "@/hooks/use-route"
-import { api, urls, type Batch, type Clip, type Job, type Script } from "@/lib/api"
-import { jobOf, setCurrent } from "@/lib/current"
-import { minutes } from "@/lib/format"
+import { api, urls, type OutputVideo } from "@/lib/api"
 import { cn } from "@/lib/utils"
+import { useSessionState } from "@/hooks/use-session-state"
+import { PAGE_CONTAINER, PAGE_TITLE } from "@/lib/layout"
 
-const msg = (e: unknown) => String(e).replace(/^Error: /, "")
-const PIPELINE = ["auto", "generate", "transcribe", "render"]
+const keyOf = (video: OutputVideo) => JSON.stringify([video.batch, video.id])
 
-const STEPS = [
-  { title: "语音识别", desc: "逐句识别粤语和普通话，带时间戳" },
-  { title: "出剪辑脚本", desc: "大模型按「开头钩子 → 逐只表讲解 → 结尾引导」选句，写粤语字幕" },
-  { title: "出片", desc: "1440×2560 · 60fps · 字幕角标 · 美颜调色；有普通话的自动换成粤语配音" },
-]
-
-/** 任务进行到哪一步：0 识别、1 出脚本、2 出片 */
-function stageOf(j: Job): number {
-  if (j.kind === "transcribe") return 0
-  if (j.kind === "render") return 2
-  if (j.kind === "generate") return /脚本/.test(j.message) ? 1 : 0
-  // 一键出片：进度 0–1/3 识别、1/3–2/3 出脚本、2/3–1 出片
-  return j.progress < 1 / 3 ? 0 : j.progress < 2 / 3 ? 1 : 2
-}
-
-export function GenPage({ batch }: { batch: string }) {
-  const { jobs, active, watch, version } = useJobs()
-  const [b, setB] = useState<Batch | null>(null)
-  const [scripts, setScripts] = useState<Script[] | null>(null)
-  const [clips, setClips] = useState<Clip[]>([])
-  const [missing, setMissing] = useState(false)
-  const [sel, setSel] = useState(0)
-  const [starting, setStarting] = useState(false)
+export function GenPage() {
+  const { version, active } = useJobs()
+  const generating = active.some((job) => job.kind === "auto" || job.kind === "render")
+  const [videos, setVideos] = useState<OutputVideo[] | null>(null)
+  const [selected, setSelected] = useSessionState<Set<string>>("gallery.selected", () => new Set())
+  const [preview, setPreview] = useState<OutputVideo | null>(null)
+  const [exporting, setExporting] = useSessionState("gallery.exporting", false)
+  const [deleting, setDeleting] = useSessionState<string | null>("gallery.deleting", null)
 
   useEffect(() => {
-    setCurrent(batch)
-    setB(null)
-    setScripts(null)
-    setClips([])
-    setSel(0)
-    setMissing(false)
-  }, [batch])
+    let alive = true
+    const load = () => api.outputs().then((list) => {
+      if (alive) setVideos(list)
+    }).catch((e) => {
+      if (alive) {
+        setVideos((previous) => previous ?? [])
+        toast.error("加载成片失败", { description: String(e).replace(/^Error: /, "") })
+      }
+    })
+    load()
+    const timer = window.setInterval(load, generating ? 1500 : 5000)
+    const visible = () => { if (document.visibilityState === "visible") void load() }
+    window.addEventListener("jh:refresh", load)
+    window.addEventListener("focus", load)
+    document.addEventListener("visibilitychange", visible)
+    return () => {
+      alive = false
+      window.clearInterval(timer)
+      window.removeEventListener("jh:refresh", load)
+      window.removeEventListener("focus", load)
+      document.removeEventListener("visibilitychange", visible)
+    }
+  }, [version, generating])
 
-  const job = active.find((j) => jobOf(j, batch) && PIPELINE.includes(j.kind))
-  const running = !!job
-  const stage = job ? stageOf(job) : -1
-  const last = jobs.find((j) => jobOf(j, batch) && j.kind !== "render" && PIPELINE.includes(j.kind))
+  const list = videos ?? []
+  const chosen = list.filter((video) => selected.has(keyOf(video)))
+  const allSelected = list.length > 0 && chosen.length === list.length
+  const busy = exporting || deleting !== null
 
-  const load = useCallback(async () => {
-    const found = (await api.batches()).find((x) => x.batch === batch)
-    if (!found) return setMissing(true)
-    setB(found)
-    setScripts(await api.scripts(batch))
-  }, [batch])
+  function toggle(video: OutputVideo) {
+    if (busy) return
+    setSelected((previous) => {
+      const next = new Set(previous)
+      const key = keyOf(video)
+      if (next.has(key)) next.delete(key)
+      else next.add(key)
+      return next
+    })
+  }
 
-  useEffect(() => {
-    load().catch((e) => toast.error("加载失败", { description: msg(e) }))
-    api.clips(batch).then(setClips).catch(() => {})
-  }, [load, batch, version])
-  // 生成过程中每 3 秒刷新一次：出完一条就能在左边看到
-  useEffect(() => {
-    if (!running) return
-    const t = setInterval(() => load().catch(() => {}), 3000)
-    return () => clearInterval(t)
-  }, [running, load])
-  // 进度走到下一步时，左边自动跟着选中；到出片这步列表换成成片，从第一条开始
-  useEffect(() => {
-    if (stage >= 0) setSel(stage < 2 ? stage : 0)
-  }, [stage])
-
-  async function startAuto() {
-    setStarting(true)
+  async function exportVideos() {
+    if (!chosen.length || busy) return
+    setExporting(true)
     try {
-      const j = await api.auto(batch)
-      watch(j, (job) => toast.success(`「${batch}」生成完成，共 ${(job.result as string[]).length} 条成片`))
-      setSel(0)
+      const { url } = await api.exportOutputs(chosen.map(({ batch, id }) => ({ batch, id })))
+      const link = document.createElement("a")
+      link.href = url
+      link.download = "成片.zip"
+      document.body.appendChild(link)
+      link.click()
+      link.remove()
     } catch (e) {
-      toast.error("没法开始", { description: msg(e) })
+      toast.error("导出失败", { description: String(e).replace(/^Error: /, "") })
     } finally {
-      setStarting(false)
+      setExporting(false)
     }
   }
-  async function render(id: string) {
+
+  async function deleteVideos(targets: OutputVideo[]) {
+    if (!targets.length || busy) return
+    let removed = 0
+    const errors: string[] = []
+    setDeleting(keyOf(targets[0]))
     try {
-      const j = await api.render(batch, id)
-      toast("已加入出片队列")
-      watch(j, () => toast.success(`${id} 出片完成`))
-    } catch (e) {
-      toast.error("没法出片", { description: msg(e) })
+      for (const video of targets) {
+        const key = keyOf(video)
+        setDeleting(key)
+        try {
+          await api.deleteOutput(video.batch, video.id)
+          removed++
+          setVideos((previous) => previous?.filter((item) => keyOf(item) !== key) ?? [])
+          setSelected((previous) => {
+            const next = new Set(previous)
+            next.delete(key)
+            return next
+          })
+          setPreview((previous) => previous && keyOf(previous) === key ? null : previous)
+        } catch (e) {
+          errors.push(`${video.title}：${String(e).replace(/^Error: /, "")}`)
+        }
+      }
+      if (removed) {
+        window.dispatchEvent(new Event("jh:refresh"))
+        toast.success(`已删除 ${removed} 条成片`)
+      }
+      if (errors.length) toast.error("删除失败", { description: errors.join("；") })
+    } finally {
+      setDeleting(null)
     }
   }
-  async function renderAll() {
-    try {
-      const list = await api.renderAll(batch)
-      toast(`已加入 ${list.length} 条出片任务`)
-      list.forEach((j) => watch(j, (job) => toast.success(`${job.title} 完成`)))
-    } catch (e) {
-      toast.error("没法出片", { description: msg(e) })
-    }
-  }
-
-  if (missing) return <ProjectMissing kind="batch" name={batch} />
-  if (!b || !scripts) {
-    return <div className="grid min-h-svh place-items-center"><Loader2 className="size-6 animate-spin text-muted-foreground" /></div>
-  }
-
-  // 哪条正在出片、出到多少
-  const renderingNow = new Map<string, number>()
-  if (job && job.kind === "auto" && stage === 2) {
-    const m = job.message.match(/第 (\d+)\/(\d+) 条/)
-    if (m) {
-      const i = Number(m[1]) - 1
-      const n = Number(m[2])
-      if (scripts[i]) renderingNow.set(scripts[i].id, Math.max(0, Math.min(1, job.progress * 3 * n - 2 * n - i)))
-    }
-  }
-  for (const j of active) {
-    if (j.kind === "render" && jobOf(j, batch)) renderingNow.set(j.title.replace(/ 出片$/, ""), j.status === "running" ? j.progress : -1)
-  }
-
-  const rendered = scripts.filter((s) => s.has_output).length
-  const pending = scripts.length - rendered
-  // 重新生成时旧脚本要等新脚本出来才归档，这之前先显示步骤，不显示旧的
-  const showSteps = !scripts.length || (!!job && (job.kind === "auto" || job.kind === "generate") && stage < 2)
-  const failed = !running && last?.status === "error"
-
-  const title = running ? "正在生成" : scripts.length && !pending ? "生成完成" : "生成"
-  const header = (
-    <div className="mb-8">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <button onClick={() => go({ page: "projects" })} className="text-xs text-muted-foreground transition-colors hover:text-foreground">
-          项目 · <span className="text-foreground/80">{batch}</span>
-        </button>
-        <div className="flex gap-1">
-          <Button variant="ghost" size="sm" className="rounded-full text-muted-foreground" onClick={() => go({ page: "batch", batch, tab: "scripts" })}>
-            <Settings2 />素材与脚本
-          </Button>
-          <Button variant="ghost" size="sm" className="rounded-full text-muted-foreground" onClick={() => go({ page: "home" })}>
-            <Plus />新项目
-          </Button>
-        </div>
-      </div>
-      <motion.h1
-        key={title}
-        initial={{ opacity: 0, y: 6 }}
-        animate={{ opacity: 1, y: 0 }}
-        transition={{ duration: 0.35, ease }}
-        className="mt-3 text-4xl font-bold tracking-tight md:text-5xl lg:text-6xl"
-      >
-        {title}
-      </motion.h1>
-
-      {/* 进度 / 状态 */}
-      {job ? (
-        <div className="mt-6 rounded-2xl border p-4">
-          <div className="flex flex-wrap items-center gap-x-3 gap-y-1 text-sm">
-            {STEPS.map((s, i) => (
-              <span key={s.title} className={cn("flex items-center gap-1.5", i === stage ? "font-medium text-foreground" : i < stage ? "text-foreground/70" : "text-muted-foreground/60")}>
-                {i < stage ? <Check className="size-3.5" /> : i === stage ? <Loader2 className="size-3.5 animate-spin" /> : <span className="size-1.5 rounded-full bg-current" />}
-                {s.title}
-              </span>
-            ))}
-          </div>
-          <div className="mt-3 h-1 overflow-hidden rounded-full bg-muted">
-            <motion.div className="h-full rounded-full bg-foreground" initial={false} animate={{ width: `${Math.round(job.progress * 100)}%` }} transition={{ duration: 0.5, ease }} />
-          </div>
-          <div className="mt-2 flex justify-between gap-3 text-xs text-muted-foreground">
-            <span className="truncate">{job.status === "queued" ? "排队中，前面的任务做完就开始" : job.message || "准备中"}</span>
-            <span className="tabular">{Math.round(job.progress * 100)}%</span>
-          </div>
-        </div>
-      ) : failed ? (
-        <div className="mt-6 flex flex-wrap items-center gap-3 rounded-2xl border border-destructive/30 bg-destructive/5 p-4 text-sm">
-          <CircleAlert className="size-4 shrink-0 text-destructive" />
-          <span className="min-w-0 flex-1 text-destructive">上次生成出错：{last?.error.split("\n")[0]}</span>
-          <Button size="sm" variant="outline" className="rounded-full" disabled={starting} onClick={startAuto}><RotateCcw />重新生成</Button>
-        </div>
-      ) : !b.clips ? (
-        <div className="mt-6 flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
-          这个项目还没有素材
-          <Button size="sm" variant="outline" className="rounded-full" onClick={() => go({ page: "batch", batch, tab: "clips" })}>去添加素材</Button>
-        </div>
-      ) : !scripts.length ? (
-        <div className="mt-6 flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
-          {b.clips} 个视频已就绪{b.total_seconds ? ` · ${minutes(b.total_seconds)} 分钟` : ""}
-          <Button size="sm" className="rounded-full bg-foreground text-background hover:bg-foreground/85" disabled={starting} onClick={startAuto}>
-            {starting ? <Loader2 className="animate-spin" /> : <Sparkles />}开始生成
-          </Button>
-        </div>
-      ) : (
-        <div className="mt-6 flex flex-wrap items-center gap-3 text-sm text-muted-foreground">
-          <span>{rendered}/{scripts.length} 条已出片 · 点一条看成片</span>
-          {pending > 0 && (
-            <Button size="sm" className="rounded-full bg-foreground text-background hover:bg-foreground/85" onClick={renderAll}><Play />剩下 {pending} 条全部出片</Button>
-          )}
-        </div>
-      )}
-    </div>
-  )
-
-  if (showSteps) {
-    const thumbs = clips.slice(0, 9).map((c) => urls.thumb(batch, c.clip, Math.min(3, c.duration / 2)))
-    const items: PanelItem[] = STEPS.map((s, i) => ({
-      key: s.title,
-      title: s.title,
-      badge: stage > i || (i === 0 && !running && b.clips > 0 && b.transcribed >= b.clips)
-        ? <Check className="size-4 text-muted-foreground" />
-        : stage === i ? <Loader2 className="size-4 animate-spin text-muted-foreground" /> : null,
-      detail: (
-        <p className="text-sm leading-relaxed text-muted-foreground">
-          {s.desc}
-          {i === 0 && b.clips > 0 && <span className="mt-1 block text-xs tabular">已识别 {b.transcribed}/{b.clips} 个视频</span>}
-        </p>
-      ),
-      media: null,
-    }))
-    return (
-      <div className="mx-auto max-w-6xl px-6 pt-10 pb-40">
-        <FeaturePanel
-          header={header}
-          items={items}
-          active={sel}
-          onActive={setSel}
-          aside={
-            <MediaMosaic srcs={thumbs}>
-              {job && (
-                <div className="absolute inset-x-0 bottom-0 bg-gradient-to-t from-black/75 to-transparent p-4 pt-16 text-white">
-                  <div className="flex items-center gap-2 text-sm font-medium"><Loader2 className="size-4 animate-spin" />{STEPS[Math.max(0, stage)].title}中</div>
-                  <div className="mt-1 truncate text-xs text-white/75">{job.message}</div>
-                </div>
-              )}
-              {!thumbs.length && <div className="absolute inset-0 grid place-items-center text-sm text-muted-foreground">素材缩略图</div>}
-            </MediaMosaic>
-          }
-        />
-      </div>
-    )
-  }
-
-  const items: PanelItem[] = scripts.map((s) => {
-    const first = s.lines[0]
-    const cover = s.has_output ? urls.outputThumb(batch, s.id) : first ? urls.thumb(batch, first.clip, (first.start + first.end) / 2) : ""
-    const doing = renderingNow.get(s.id)
-    const state = s.has_output ? "done" : doing !== undefined ? (doing >= 0 ? "doing" : "queued") : running ? "queued" : "idle"
-    return {
-      key: s.id,
-      title: s.title,
-      badge: (
-        <span className="flex shrink-0 items-center gap-1 text-xs text-muted-foreground tabular">
-          {state === "done" ? <><Check className="size-3.5" />已出片</>
-            : state === "doing" ? <><Loader2 className="size-3.5 animate-spin" />{Math.round((doing ?? 0) * 100)}%</>
-            : state === "queued" ? "排队出片"
-            : s.status === "draft" ? "待审核" : "未出片"}
-        </span>
-      ),
-      detail: (
-        <div className="space-y-3">
-          <div className="text-xs text-muted-foreground tabular">
-            {s.duration ?? 0} 秒 · {s.lines.length} 句 · {s.resolved_voice === "tts_all" ? "粤语配音" : "原声"}
-          </div>
-          <p className="line-clamp-3 text-sm leading-relaxed text-muted-foreground">{s.lines.map((l) => l.subtitle).join("，")}</p>
-          <div className="flex flex-wrap gap-2">
-            {s.has_output && (
-              <Button size="sm" asChild className="rounded-full bg-foreground text-background hover:bg-foreground/85">
-                <a href={urls.output(batch, s.id)} download={`${s.id}.mp4`} onClick={(e) => e.stopPropagation()}><Download />下载</a>
-              </Button>
-            )}
-            <Button size="sm" variant="outline" className="rounded-full" onClick={() => go({ page: "script", batch, id: s.id })}><PencilLine />审核修改</Button>
-            {state === "idle" && <Button size="sm" variant="outline" className="rounded-full" onClick={() => render(s.id)}><Play />出片</Button>}
-          </div>
-        </div>
-      ),
-      media: s.has_output ? (
-        <MediaVideo src={urls.output(batch, s.id)} poster={cover} />
-      ) : (
-        <div className="relative size-full">
-          {cover && <MediaImage src={cover} alt={s.title} />}
-          <div className="absolute inset-0 grid place-items-center bg-black/35 text-white">
-            <div className="grid justify-items-center gap-2 text-sm font-medium">
-              {state === "doing" || state === "queued" ? <Loader2 className="size-6 animate-spin" /> : <Play className="size-6" />}
-              {state === "doing" ? `出片中 ${Math.round((doing ?? 0) * 100)}%` : state === "queued" ? "排队出片" : "还没出片"}
-            </div>
-          </div>
-        </div>
-      ),
-    }
-  })
 
   return (
-    <div className="mx-auto max-w-6xl px-6 pt-10 pb-40">
-      <FeaturePanel header={header} items={items} active={sel} onActive={setSel} />
+    <div className={PAGE_CONTAINER}>
+      <div className="mb-8 flex flex-wrap items-center justify-between gap-3">
+        <div className="flex items-center gap-3">
+          <h1 className={PAGE_TITLE}>成片</h1>
+          <Button variant="outline" size="icon-lg" className="rounded-full" aria-label="上传素材" title="上传素材" onClick={() => go({ page: "home" })}><Plus /></Button>
+        </div>
+        <div className="flex flex-wrap items-center gap-3">
+          <Button variant="outline" className="h-10 rounded-full px-5 aria-pressed:bg-muted disabled:bg-muted" aria-pressed={allSelected}
+            disabled={!list.length || busy} onClick={() => setSelected(allSelected ? new Set() : new Set(list.map(keyOf)))}>{allSelected ? "取消全选" : "全选"}</Button>
+          <Button className="h-10 min-w-26 rounded-full px-5 disabled:bg-muted" disabled={!chosen.length || busy} aria-busy={exporting} onClick={exportVideos}>
+            {exporting ? "导出中…" : "一键导出"}
+          </Button>
+          <Button className="h-10 rounded-full px-5 disabled:bg-muted" disabled={!chosen.length || busy} aria-busy={deleting !== null} onClick={() => deleteVideos(chosen)}>
+            {deleting !== null ? "删除中…" : "删除"}
+          </Button>
+        </div>
+      </div>
+
+      {videos === null ? (
+        <div className="grid min-h-[60svh] place-items-center"><Loader2 aria-label="正在加载成片" className="size-6 animate-spin text-muted-foreground" /></div>
+      ) : !list.length ? (
+        <div className="grid min-h-[60svh] place-items-center text-sm text-muted-foreground">暂无成片</div>
+      ) : (
+        <div role="group" aria-label="全部成片" className="grid grid-cols-2 gap-4 sm:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5">
+          {list.map((video) => {
+            const checked = selected.has(keyOf(video))
+            return (
+              <article key={keyOf(video)} className={cn("group relative overflow-hidden rounded-2xl bg-muted transition-shadow", checked && "ring-2 ring-foreground ring-offset-4 ring-offset-background")}>
+                <div className="relative">
+                <button role="checkbox" aria-checked={checked} aria-label={`选择成片：${video.title}（${video.batch}）`} disabled={busy} onClick={() => toggle(video)}
+                  className="relative block aspect-9/16 w-full cursor-pointer overflow-hidden rounded-2xl outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-foreground">
+                  <Film aria-hidden="true" className="absolute top-1/2 left-1/2 size-8 -translate-1/2 text-muted-foreground/30" />
+                  <img src={`${urls.outputThumb(video.batch, video.id)}&v=${video.updated}`} alt="" loading="lazy"
+                    onError={(e) => { e.currentTarget.hidden = true }} className="relative size-full object-cover transition-transform duration-300 group-hover:scale-[1.02]" />
+                  <span aria-hidden="true" className={cn("absolute top-3 left-3 grid size-6 place-items-center rounded-full border shadow-sm transition-opacity", checked ? "border-foreground bg-foreground text-background" : "border-white/80 bg-black/20 text-transparent opacity-0 group-hover:opacity-100 group-has-[:focus-visible]:opacity-100")}><Check className="size-4" /></span>
+                </button>
+                <div data-video-actions className="pointer-events-none absolute right-3 bottom-3 flex gap-2 opacity-0 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-has-[:focus-visible]:pointer-events-auto group-has-[:focus-visible]:opacity-100">
+                  <Button variant="secondary" size="icon" className="rounded-full shadow-sm" aria-label={`预览成片：${video.title}`} title="播放" onClick={() => setPreview(video)}><Play className="size-4" /></Button>
+                  <Button variant="secondary" size="icon" asChild className="rounded-full shadow-sm">
+                    <a href={urls.output(video.batch, video.id)} download={`${video.id}.mp4`} aria-label={`下载成片：${video.title}`} title="下载"><Download className="size-4" /></a>
+                  </Button>
+                  <Button variant="secondary" size="icon" className="rounded-full shadow-sm hover:text-destructive" aria-label={`删除成片：${video.title}`} title="删除" disabled={busy} aria-busy={deleting === keyOf(video)} onClick={() => deleteVideos([video])}>
+                    {deleting === keyOf(video) ? <Loader2 className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
+                  </Button>
+                </div>
+                </div>
+                <div className="truncate px-3 py-3 text-sm font-medium" title={video.title}>{video.title}</div>
+              </article>
+            )
+          })}
+        </div>
+      )}
+
+      <Dialog.Root open={preview !== null} onOpenChange={(open) => { if (!open) setPreview(null) }}>
+        <Dialog.Portal>
+          <Dialog.Overlay className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm" />
+          <Dialog.Content aria-describedby={undefined} className="fixed top-1/2 left-1/2 z-50 w-[min(440px,calc(100vw-48px))] -translate-x-1/2 -translate-y-1/2 outline-none">
+            <Dialog.Title className="sr-only">{preview?.title}</Dialog.Title>
+            {preview && <video key={keyOf(preview)} src={urls.output(preview.batch, preview.id)} poster={`${urls.outputThumb(preview.batch, preview.id)}&v=${preview.updated}`} controls autoPlay playsInline className="max-h-[85svh] w-full rounded-2xl bg-black" />}
+            <Dialog.Close asChild><Button size="icon" variant="secondary" className="absolute -top-4 -right-4 rounded-full" aria-label="关闭预览"><X /></Button></Dialog.Close>
+          </Dialog.Content>
+        </Dialog.Portal>
+      </Dialog.Root>
     </div>
   )
 }

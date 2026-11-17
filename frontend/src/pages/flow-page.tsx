@@ -1,10 +1,16 @@
 // 剪辑流程：六个步骤横向排列，点开步骤查看配置、切换模型。
 import { useCallback, useEffect, useState } from "react"
-import { ArrowRight, ChevronDown, CircleAlert, Cpu, FlaskConical, Loader2, PencilLine, RefreshCw, X } from "lucide-react"
+import { ArrowRight, Check, ChevronDown, CircleAlert, Cpu, FlaskConical, Loader2, PencilLine, RefreshCw, X } from "lucide-react"
 import { AnimatePresence, motion } from "motion/react"
 import { toast } from "sonner"
 
 import { ease } from "@/components/motion"
+import { useJobs } from "@/hooks/use-jobs"
+import { go } from "@/hooks/use-route"
+import { jobOf } from "@/lib/current"
+import { CLIP_JOBS, pipelineStage } from "@/lib/pipeline-status"
+import { PAGE_CONTAINER, PAGE_TITLE } from "@/lib/layout"
+import { useSessionState } from "@/hooks/use-session-state"
 import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
@@ -15,6 +21,7 @@ const msg = (e: unknown) => String(e).replace(/^Error: /, "")
 
 /** 折叠时步骤卡片上显示的模型小标签 */
 function chips(step: PipelineStep): string[] {
+  if (step.id === "upload") return []
   const out: string[] = []
   for (const f of step.fields) {
     if (f.type === "info") out.push(String(f.value))
@@ -53,8 +60,8 @@ function FieldEditor({ f, busy, onSave, onRefreshModels }: {
 }) {
   const [custom, setCustom] = useState(false)
   const [text, setText] = useState(typeof f.value === "string" ? f.value : "")
-  const [testing, setTesting] = useState(false)
-  const [refreshing, setRefreshing] = useState(false)
+  const [testing, setTesting] = useSessionState(`flow.testing:${f.key}`, false)
+  const [refreshing, setRefreshing] = useSessionState(`flow.refreshing:${f.key}`, false)
   useEffect(() => setText(typeof f.value === "string" ? f.value : ""), [f.value])
 
   async function test() {
@@ -75,10 +82,10 @@ function FieldEditor({ f, busy, onSave, onRefreshModels }: {
         <span>{f.label}</span>
         {f.key === "llm.model" && (
           <span className="flex gap-1">
-            <Button size="xs" variant="ghost" className="rounded-full" disabled={testing} onClick={test} title="发一句很短的话，看这个模型能不能用">
+            <Button size="xs" variant="ghost" className="rounded-full" disabled={testing} aria-busy={testing} onClick={test} title="发一句很短的话，看这个模型能不能用">
               {testing ? <Loader2 className="animate-spin" /> : <FlaskConical />}测试
             </Button>
-            <Button size="xs" variant="ghost" className="rounded-full" disabled={refreshing}
+            <Button size="xs" variant="ghost" className="rounded-full" disabled={refreshing} aria-busy={refreshing}
               onClick={async () => { setRefreshing(true); await onRefreshModels(); setRefreshing(false) }} title="重新向中转站要一次模型列表">
               {refreshing ? <Loader2 className="animate-spin" /> : <RefreshCw />}刷新列表
             </Button>
@@ -94,7 +101,7 @@ function FieldEditor({ f, busy, onSave, onRefreshModels }: {
             <Input autoFocus value={text} onChange={(e) => setText(e.target.value)} placeholder="模型名，例如 gpt-6"
               onKeyDown={(e) => { if (e.key === "Enter" && text.trim()) { onSave(text.trim()); setCustom(false) } if (e.key === "Escape") setCustom(false) }}
               className="rounded-lg font-mono text-xs" />
-            <Button size="sm" className="rounded-lg" disabled={busy || !text.trim()} onClick={() => { onSave(text.trim()); setCustom(false) }}>保存</Button>
+            <Button size="sm" className="rounded-lg" disabled={busy || !text.trim()} aria-busy={busy} onClick={() => { onSave(text.trim()); setCustom(false) }}>保存</Button>
           </div>
         ) : (
           <div className="flex items-center gap-2">
@@ -152,11 +159,12 @@ function FieldEditor({ f, busy, onSave, onRefreshModels }: {
   )
 }
 
-function StepCard({ id, index, step, open, onToggle }: {
+function StepCard({ id, index, step, open, state, onToggle }: {
   id: string
   index: number
   step: PipelineStep
   open: boolean
+  state: "idle" | "running" | "done" | "error"
   onToggle: () => void
 }) {
   const editable = step.fields.some((f) => f.key)
@@ -164,13 +172,19 @@ function StepCard({ id, index, step, open, onToggle }: {
     <button
       id={`flow-step-${id}`}
       aria-expanded={open}
+      aria-current={state === "running" ? "step" : undefined}
+      data-state={state}
       aria-controls={open ? "flow-step-details" : undefined}
       onClick={onToggle}
-      className={cn("h-full min-h-40 w-full rounded-xl border bg-background p-3.5 text-left transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring", open ? "border-foreground shadow-[0_8px_30px_oklch(0_0_0/7%)]" : "hover:border-foreground/40")}
+      className={cn("h-full min-h-40 w-full rounded-xl border bg-background p-3.5 text-left transition-all duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring", open ? "border-foreground shadow-[0_8px_30px_oklch(0_0_0/7%)]" : "hover:border-foreground/40",
+        state === "running" && "border-emerald-500 bg-emerald-500/10 shadow-[0_0_30px_rgb(16_185_129/20%)] ring-2 ring-emerald-500/30",
+        state === "done" && "border-emerald-500/30 bg-emerald-500/5",
+        state === "error" && "border-destructive bg-destructive/5 ring-2 ring-destructive/20")}
     >
       <span className="flex items-center justify-between gap-2">
-        <span className={cn("grid size-6 shrink-0 place-items-center rounded-full text-[11px] font-medium tabular", open ? "bg-foreground text-background" : "bg-muted text-muted-foreground")}>
-          {index + 1}
+        <span className={cn("grid size-6 shrink-0 place-items-center rounded-full text-[11px] font-medium tabular", open ? "bg-foreground text-background" : "bg-muted text-muted-foreground",
+          state === "running" && "bg-emerald-500 text-white", state === "done" && "bg-emerald-500/15 text-emerald-600", state === "error" && "bg-destructive text-white")}>
+          {state === "running" ? <Loader2 className="size-3.5 animate-spin" /> : state === "done" ? <Check className="size-3.5" /> : state === "error" ? <CircleAlert className="size-3.5" /> : index + 1}
         </span>
         <span className="flex shrink-0 items-center gap-1 text-[11px] text-muted-foreground">
           {editable && !open && "换模型"}
@@ -189,11 +203,29 @@ function StepCard({ id, index, step, open, onToggle }: {
   )
 }
 
-export function FlowPage() {
+export function FlowPage({ batch, jobId }: { batch?: string; jobId?: string }) {
+  const { jobs } = useJobs()
   const [p, setP] = useState<Pipeline | null>(null)
   const [error, setError] = useState<string | null>(null)
-  const [open, setOpen] = useState<string | null>(null)
-  const [busyKey, setBusyKey] = useState<string | null>(null)
+  const [open, setOpen] = useSessionState<string | null>("flow.open", null)
+  const [busyKey, setBusyKey] = useSessionState<string | null>("flow.busyKey", null)
+  const candidates = jobs.filter((job) => CLIP_JOBS.includes(job.kind) && (!batch || jobOf(job, batch)))
+  const tracked = jobId ? candidates.find((job) => job.id === jobId) : undefined
+  const running = candidates.find((job) => job.status === "running") ?? candidates.find((job) => job.status === "queued")
+  const failed = tracked ? candidates.find((item) => item.created >= tracked.created && item.status === "error") : undefined
+  const job = tracked && tracked.status !== "done" ? tracked : running ?? failed ?? tracked ?? candidates[0]
+  const stage = job ? pipelineStage(job) : null
+  const completed = new Set(job?.completed_stages ?? [])
+  const allFinished = !running
+
+  useEffect(() => {
+    if (jobId && tracked?.status === "done" && ["auto", "render"].includes(tracked.kind) && allFinished
+      && !failed) go({ page: "gen" })
+  }, [jobId, tracked, allFinished, failed])
+
+  useEffect(() => {
+    if (stage && stage !== "done") document.getElementById(`flow-step-${stage}`)?.scrollIntoView({ behavior: "smooth", block: "nearest", inline: "center" })
+  }, [stage, p])
 
   const load = useCallback(() => api.pipeline().then((x) => { setP(x); setError(null) }).catch((e) => setError(msg(e))), [])
   useEffect(() => { load() }, [load])
@@ -225,7 +257,7 @@ export function FlowPage() {
     }
   }
 
-  const steps = p?.branches.find((b) => b.id === "clip")?.steps.filter((s) => s.id !== "tts") ?? []
+  const steps = p?.branches.find((b) => b.id === "clip")?.steps.filter((s) => s.id !== "tts" || !s.off || stage === "tts") ?? []
   const selected = steps.find((s) => s.id === open)
 
   if (error) {
@@ -241,21 +273,25 @@ export function FlowPage() {
   if (!p) return <div className="grid min-h-svh place-items-center"><Loader2 className="size-6 animate-spin text-muted-foreground" /></div>
 
   return (
-    <div className="mx-auto max-w-7xl px-6 pt-10 pb-40">
-      <span className="text-xs text-muted-foreground">流程图</span>
-      <h1 className="mt-3 text-4xl font-bold tracking-tight md:text-5xl lg:text-6xl">剪辑流程</h1>
-      <p className="mt-4 max-w-2xl text-sm leading-relaxed text-muted-foreground">
-        从上传素材到出片，点开步骤查看配置或切换模型。修改在下一次生成时生效，识别模型需在没有任务运行时更换。
-      </p>
+    <div className={PAGE_CONTAINER}>
+      <h1 className={PAGE_TITLE}>剪辑流程</h1>
       {!p.llm_ready && (
         <p className="mt-3 flex items-center gap-1.5 text-sm text-destructive"><CircleAlert className="size-4" />还没有填大模型 API Key（secrets.yaml），出脚本会失败</p>
       )}
 
+      {job && (
+        <div role="progressbar" aria-label="生成进度" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(job.progress * 100)} className="mt-8 h-1.5 overflow-hidden rounded-full bg-muted">
+          <motion.div className={cn("h-full rounded-full bg-emerald-500", job.status === "error" && "bg-destructive")} initial={false} animate={{ width: `${Math.round(job.progress * 100)}%` }} transition={{ duration: 0.4, ease }} />
+          <span className="sr-only" aria-live="polite">{job.message}</span>
+        </div>
+      )}
+
       <div role="region" aria-label="剪辑流程，可横向滚动" tabIndex={0} className="scrollbar-thin mt-10 overflow-x-auto rounded-xl pb-4 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring">
-        <ol className="flex min-w-[1120px] items-stretch gap-8 py-2">
+        <ol className="flex min-w-[1040px] items-stretch gap-8 py-2">
           {steps.map((s, i) => (
             <li key={s.id} className="relative min-w-0 flex-1">
               <StepCard id={s.id} index={i} step={s} open={open === s.id}
+                state={stage === s.id ? job?.status === "error" ? "error" : "running" : completed.has(s.id) ? "done" : "idle"}
                 onToggle={() => setOpen((o) => (o === s.id ? null : s.id))} />
               {i < steps.length - 1 && <ArrowRight aria-hidden="true" className="absolute top-20 -right-6 size-4 -translate-y-1/2 text-muted-foreground/50" />}
             </li>

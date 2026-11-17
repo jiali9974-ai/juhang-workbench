@@ -1,4 +1,4 @@
-import { useRef, useState } from "react"
+import { useRef } from "react"
 import { FolderInput, FolderUp, Loader2 } from "lucide-react"
 import { toast } from "sonner"
 
@@ -7,25 +7,26 @@ import { Button } from "@/components/ui/button"
 import { Input } from "@/components/ui/input"
 import { useJobs } from "@/hooks/use-jobs"
 import { api } from "@/lib/api"
+import { useSessionState } from "@/hooks/use-session-state"
 
 type Queue = ReturnType<typeof useUploadQueue>
 
 /** 素材剪辑项目的「添加素材」：拖入/点选视频、选择文件夹上传、本机文件夹路径一键加载 */
 export function ClipSources({ batch, queue, big, onChanged }: { batch: string; queue: Queue; big?: boolean; onChanged: () => void }) {
-  const { watch } = useJobs()
+  const { watch, active } = useJobs()
   const folderRef = useRef<HTMLInputElement | null>(null)
-  const [path, setPath] = useState("")
-  const [importing, setImporting] = useState(false)
+  const [path, setPath] = useSessionState(`import.path:${batch}`, "")
+  const [requesting, setRequesting] = useSessionState(`import.requesting:${batch}`, false)
+  const importing = requesting || active.some((job) => job.kind === "import" && job.title === `加载文件夹到 ${batch}`)
 
   async function importPath() {
     const p = path.trim()
     if (!p) return toast.error("请填写本机文件夹路径")
-    setImporting(true)
+    setRequesting(true)
     try {
       const j = await api.importFolder(batch, p)
       toast("正在加载文件夹里的视频", { description: p })
       watch(j, (job) => {
-        setImporting(false)
         const r = job.result as { added: number; linked: number; copied: number; total: number }
         toast.success(`已加载 ${r.added} 个视频${r.total > r.added ? `（${r.total - r.added} 个之前已加过）` : ""}`,
           { description: r.linked ? `${r.linked} 个用硬链接，没有占用额外硬盘空间` : r.copied ? `${r.copied} 个是复制过来的` : undefined })
@@ -33,8 +34,9 @@ export function ClipSources({ batch, queue, big, onChanged }: { batch: string; q
         onChanged()
       })
     } catch (e) {
-      setImporting(false)
       toast.error("加载失败", { description: String(e).replace(/^Error: /, "") })
+    } finally {
+      setRequesting(false)
     }
   }
 
@@ -63,7 +65,7 @@ export function ClipSources({ batch, queue, big, onChanged }: { batch: string; q
             placeholder="填这台电脑上的文件夹路径，例如 D:\巨航\素材\素材\9.29"
             className="font-mono text-xs"
           />
-          <Button onClick={importPath} disabled={importing} className="shrink-0">
+          <Button onClick={importPath} disabled={importing} aria-busy={importing} className="shrink-0">
             {importing ? <Loader2 className="animate-spin" /> : <FolderInput />}一键加载文件夹
           </Button>
         </div>

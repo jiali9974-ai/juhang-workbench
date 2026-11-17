@@ -1,34 +1,22 @@
-// 底部居中的导航：生成 / 项目 / 美颜设置 / 流程图
-import { useEffect, useState } from "react"
-import { FolderOpen, Sparkles, Wand2, Workflow } from "lucide-react"
+// 底部居中的导航：成片 / 项目 / 美颜设置 / 流程图
+import { Film, FolderOpen, Wand2, Workflow } from "lucide-react"
 import { motion } from "motion/react"
 
 import { Dock, DockIcon, DockItem, DockLabel } from "@/components/ui/dock"
-import { go, type Route } from "@/hooks/use-route"
-import { api, type Batch } from "@/lib/api"
-import { pickCurrent } from "@/lib/current"
+import { getLastFlow, go, type Route } from "@/hooks/use-route"
+import { useJobs } from "@/hooks/use-jobs"
+import { getCurrent, jobOf } from "@/lib/current"
 import { cn } from "@/lib/utils"
 
 export function AppDock({ route }: { route: Route }) {
-  const [batches, setBatches] = useState<Batch[]>([])
-  useEffect(() => {
-    const load = () => api.batches().then(setBatches).catch(() => {})
-    load()
-    window.addEventListener("jh:refresh", load)
-    return () => window.removeEventListener("jh:refresh", load)
-  }, [route])
-
+  const { active } = useJobs()
   const items = [
     {
       key: "gen",
-      label: "生成",
-      icon: Sparkles,
+      label: "成片",
+      icon: Film,
       active: route.page === "gen",
-      // 回到当前项目的生成页；一个项目都没有就去上传
-      onClick: () => {
-        const b = route.page === "batch" || route.page === "script" || route.page === "beauty" ? route.batch ?? pickCurrent(batches) : pickCurrent(batches)
-        go(b ? { page: "gen", batch: b } : { page: "home" })
-      },
+      onClick: () => go({ page: "gen" }),
     },
     {
       key: "projects",
@@ -42,14 +30,17 @@ export function AppDock({ route }: { route: Route }) {
       label: "美颜设置",
       icon: Wand2,
       active: route.page === "beauty",
-      onClick: () => go({ page: "beauty", batch: route.page === "gen" || route.page === "batch" || route.page === "script" ? route.batch : undefined }),
+      onClick: () => go({ page: "beauty", batch: (route.page === "gen" || route.page === "batch" || route.page === "script" ? route.batch : undefined) ?? getCurrent() ?? undefined }),
     },
     {
       key: "flow",
       label: "流程图 · 模型",
       icon: Workflow,
       active: route.page === "flow",
-      onClick: () => go({ page: "flow" }),
+      onClick: () => {
+        const previous = getLastFlow()
+        go(previous?.batch && active.some((job) => jobOf(job, previous.batch!)) ? previous : { page: "flow" })
+      },
     },
   ]
 
@@ -61,7 +52,7 @@ export function AppDock({ route }: { route: Route }) {
       transition={{ type: "spring", stiffness: 320, damping: 30 }}
       className="pointer-events-none fixed inset-x-0 bottom-2 z-40 flex justify-center"
     >
-      <Dock className="pointer-events-auto items-end border bg-background/85 pb-3 shadow-[0_8px_30px_oklch(0_0_0/8%)] backdrop-blur-md" magnification={72}>
+      <Dock className="pointer-events-auto items-end border bg-background/85 pb-3 backdrop-blur-md" magnification={72}>
         {items.map((it) => (
           <DockItem
             key={it.key}

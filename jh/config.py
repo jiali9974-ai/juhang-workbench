@@ -32,6 +32,13 @@ def material_root() -> Path:
     return Path(load()["paths"]["material_root"])
 
 
+def output_root() -> Path:
+    """成片独立存放；未配置时兼容以前的 data/outputs。"""
+    path = Path(load()["paths"].get("output_root") or data_root() / "outputs")
+    path.mkdir(parents=True, exist_ok=True)
+    return path
+
+
 def ffmpeg() -> str:
     return load()["paths"]["ffmpeg"]
 

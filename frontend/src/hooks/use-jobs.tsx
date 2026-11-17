@@ -21,44 +21,63 @@ export function JobsProvider({ children }: { children: ReactNode }) {
   const [version, setVersion] = useState(0)
   const callbacks = useRef(new Map<string, Callback | undefined>())
   const seenFinished = useRef(new Set<string>())
+  const initialized = useRef(false)
+  const polling = useRef<Promise<void> | null>(null)
+  const optimistic = useRef(new Map<string, number>())
 
-  const poll = useCallback(async () => {
-    let list: Job[]
-    try {
-      list = await api.jobs()
-    } catch {
-      return
-    }
-    setJobs(list)
-    let finishedNow = false
-    for (const j of list) {
-      const over = j.status === "done" || j.status === "error"
-      if (over && !seenFinished.current.has(j.id)) {
-        seenFinished.current.add(j.id)
-        finishedNow = true
-        if (callbacks.current.has(j.id)) {
-          const cb = callbacks.current.get(j.id)
-          callbacks.current.delete(j.id)
-          if (j.status === "done") cb?.(j)
-          else toast.error(`${j.title} 出错`, { description: j.error.split("\n")[0] })
+  const poll = useCallback(() => {
+    if (polling.current) return polling.current
+    const update = async () => {
+      let list: Job[]
+      try {
+        list = await api.jobs()
+      } catch {
+        return
+      }
+      const returned = new Set(list.map((job) => job.id))
+      for (const id of returned) optimistic.current.delete(id)
+      setJobs((previous) => [...list, ...previous.filter((job) => !returned.has(job.id) && Date.now() - (optimistic.current.get(job.id) ?? 0) < 10000)])
+      let finishedNow = false
+      for (const j of list) {
+        const over = j.status === "done" || j.status === "error"
+        if (over && !seenFinished.current.has(j.id)) {
+          seenFinished.current.add(j.id)
+          finishedNow = initialized.current || callbacks.current.has(j.id) || finishedNow
+          if (callbacks.current.has(j.id)) {
+            const cb = callbacks.current.get(j.id)
+            callbacks.current.delete(j.id)
+            if (j.status === "done") {
+              try { cb?.(j) } catch { /* 不让页面回调影响其余任务的轮询。 */ }
+            }
+            else toast.error(`${j.title} 出错`, { description: j.error.split("\n")[0] })
+          }
         }
       }
+      if (finishedNow) setVersion((v) => v + 1)
+      initialized.current = true
     }
-    if (finishedNow) setVersion((v) => v + 1)
+    const request = update().finally(() => { polling.current = null })
+    polling.current = request
+    return request
   }, [])
 
   useEffect(() => {
-    // 页面打开前就已经结束的任务不再回调
-    api.jobs().then((list) => {
-      list.filter((j) => j.status === "done" || j.status === "error").forEach((j) => seenFinished.current.add(j.id))
-      setJobs(list)
-    }).catch(() => {})
+    poll()
     const t = setInterval(poll, 1500)
-    return () => clearInterval(t)
+    const visible = () => { if (document.visibilityState === "visible") poll() }
+    document.addEventListener("visibilitychange", visible)
+    window.addEventListener("focus", poll)
+    return () => {
+      clearInterval(t)
+      document.removeEventListener("visibilitychange", visible)
+      window.removeEventListener("focus", poll)
+    }
   }, [poll])
 
   const watch = useCallback((job: Job, onDone?: Callback) => {
     callbacks.current.set(job.id, onDone)
+    optimistic.current.set(job.id, Date.now())
+    setJobs((previous) => [job, ...previous.filter((item) => item.id !== job.id)])
     poll()
   }, [poll])
 

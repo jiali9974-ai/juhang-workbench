@@ -448,7 +448,8 @@ def candidates(segs, step: float = 0.2, want: int = 6) -> tuple[list[dict], dict
     return out, ref
 
 
-def make_best_cover(segs, lines: list[str], out_png: Path, *, settings: dict | None = None, max_tries: int = 8) -> Path:
+def make_best_cover(segs, lines: list[str], out_png: Path, *, settings: dict | None = None,
+                    max_tries: int = 8, source_out: Path | None = None) -> Path:
     """做封面，边做边检查：候选帧按“自然好看”排好，从最好的开始，在美颜调色后的高清画面上再检查脸和抠图，
     不合格就换下一帧重做（同一条素材 0.4 秒内只试一次）。都不合格时用问题最少的那一次。检查记录写在 cover_check.json。"""
     import json
@@ -476,7 +477,7 @@ def make_best_cover(segs, lines: list[str], out_png: Path, *, settings: dict | N
         problems = face_problems(fm, {"ear": ref["ear"], "sharp": 0.0})   # 高清图上不再比清晰度（候选时已经比过）
         mask, info = _person_mask(img, fm["oval"] if fm else None)
         problems += mask_problems(info)
-        entry = {"clip": Path(m["clip"]).name, "t": m["t"], "score": round(sc, 3), "problems": problems, "mask": info,
+        entry = {"clip": Path(m["clip"]).name, "t": m["t"], "zoom": m["zoom"], "score": round(sc, 3), "problems": problems, "mask": info,
                  "face": {k: v for k, v in (fm or {}).items() if k != "oval"}}
         log["tries"].append(entry)
         tried.append((len(problems), -sc, img, mask, entry))
@@ -485,12 +486,19 @@ def make_best_cover(segs, lines: list[str], out_png: Path, *, settings: dict | N
     if tried:
         tried.sort(key=lambda x: (x[0], x[1]))
         _, _, img, mask, entry = tried[0]
-        log["chosen"] = {"clip": entry["clip"], "t": entry["t"], "ok": not entry["problems"]}
+        clip = next(s.clip for s in segs if s.clip.name == entry["clip"])
+        t, zoom = entry["t"], entry["zoom"]
+        log["chosen"] = {"clip": entry["clip"], "t": t, "zoom": zoom, "ok": not entry["problems"]}
         compose(img, mask, lines, out_png)
     else:                                               # 整条视频都没量到脸：用第一段
         s = segs[0]
-        log["chosen"] = {"clip": s.clip.name, "t": s.v_start, "ok": False, "note": "没有找到脸"}
-        make_cover(s.clip, s.v_start + min(1.0, s.v_dur / 2), s.zoom, lines, out_png, settings=settings)
+        clip, t, zoom = s.clip, s.v_start + min(1.0, s.v_dur / 2), s.zoom
+        log["chosen"] = {"clip": clip.name, "t": t, "zoom": zoom, "ok": False, "note": "没有找到脸"}
+        make_cover(clip, t, zoom, lines, out_png, settings=settings)
+    if source_out is not None:
+        from . import look_sources
+
+        look_sources.save(clip, t, zoom, source_out)
     out_png.with_name("cover_check.json").write_text(json.dumps(log, ensure_ascii=False, indent=1), encoding="utf-8")
     return out_png
 

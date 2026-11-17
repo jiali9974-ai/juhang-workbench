@@ -113,7 +113,7 @@ def archive_batch(batch: str) -> Path | None:
 
     stamp = time.strftime("%Y%m%d_%H%M%S")
     moved = None
-    for base in (scripts_dir(batch), config.data_root() / "outputs" / batch):
+    for base in (scripts_dir(batch), config.output_root() / batch):
         files = [p for p in base.glob("*") if p.is_file()] if base.exists() else []
         if files:
             dst = base / f"_old_{stamp}"

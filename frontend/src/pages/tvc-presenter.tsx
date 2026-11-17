@@ -97,11 +97,11 @@ export function PresenterProject({ p, cloud, reload }: { p: TvcProject; cloud: C
           <CloudBadge s={cloud} />
           {dirty && <Button variant="outline" className="border-warn/50 text-warn" onClick={() => save()}><Save />保存修改</Button>}
           {!kfDone ? (
-            <Button className="gold-gradient shine font-bold" disabled={running} onClick={() => act(() => tvcApi.run(id, "keyframes"), "开始出分镜", "分镜出好了，请审核")}>
+            <Button className="font-bold" disabled={running} aria-busy={running} onClick={() => act(() => tvcApi.run(id, "keyframes"), "开始出分镜", "分镜出好了，请审核")}>
               {running ? <Loader2 className="animate-spin" /> : <Wand2 />}生成分镜
             </Button>
           ) : !p.final ? (
-            <Button className="gold-gradient shine font-bold" disabled={running} onClick={() => act(() => tvcApi.run(id, "final"), `开始生成 ${p.segments.length} 个镜头的视频并合成，约 10–15 分钟`, "成片出好了")}>
+            <Button className="font-bold" disabled={running} aria-busy={running} onClick={() => act(() => tvcApi.run(id, "final"), `开始生成 ${p.segments.length} 个镜头的视频并合成，约 10–15 分钟`, "成片出好了")}>
               {running ? <Loader2 className="animate-spin" /> : <Rocket />}确认分镜，生成视频
             </Button>
           ) : (
@@ -169,7 +169,7 @@ export function PresenterProject({ p, cloud, reload }: { p: TvcProject; cloud: C
                 <h2 className="text-lg font-semibold">成片</h2>
                 <p className="text-sm text-muted-foreground">1440×2560 · 粤语配音 · 字幕、左上角「先鉴定后入手 / 只做正品」、底部声明，和素材剪辑出的成片同一套样式。{total > 0 && ` 约 ${total.toFixed(0)} 秒。`}</p>
                 <div className="flex gap-2">
-                  <Button asChild className="gold-gradient font-bold"><a href={tvcFile(id, p.final)} download={`${plan?.title || id}.mp4`}><Download />下载 MP4</a></Button>
+                  <Button asChild className="font-bold"><a href={tvcFile(id, p.final)} download={`${plan?.title || id}.mp4`}><Download />下载 MP4</a></Button>
                   <Button variant="outline" disabled={running} onClick={() => act(() => tvcApi.compose(id), "重新合成", "重新合成好了")}><RefreshCw />重新合成</Button>
                 </div>
               </div>

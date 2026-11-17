@@ -1,4 +1,5 @@
 // 和工作台后端（FastAPI）通信的类型与请求
+import { backgroundTasks } from "./background-tasks.ts"
 
 export type Lang = "yue" | "zh" | string
 export type Role = "hook" | "product" | "cta"
@@ -71,6 +72,8 @@ export interface Job {
   status: "queued" | "running" | "done" | "error"
   progress: number
   message: string
+  stage?: string | null
+  completed_stages?: string[]
   result: unknown
   error: string
   created: number
@@ -111,13 +114,29 @@ export interface Info {
   max_seconds: number
 }
 
+class ApiError extends Error {
+  readonly status: number
+  constructor(status: number, message: string) { super(message); this.status = status }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const r = await fetch(path, { headers: { "Content-Type": "application/json" }, ...init })
-  if (!r.ok) {
-    const body = await r.json().catch(() => ({}))
-    throw new Error(body.detail || r.statusText)
+  const execute = async () => {
+    const r = await fetch(path, { headers: { "Content-Type": "application/json" }, ...init })
+    if (!r.ok) {
+      const body = await r.json().catch(() => ({}))
+      throw new ApiError(r.status, body.detail || r.statusText)
+    }
+    return r.json() as Promise<T>
   }
-  return r.json() as Promise<T>
+  if (!init?.method || init.method === "GET") return execute()
+  const title = path.endsWith("/api/look/preview") ? "生成美颜预览"
+    : path === "/api/outputs/export" ? "导出成片"
+    : path === "/api/pipeline/llm_models" ? "刷新模型列表"
+    : path === "/api/pipeline/test_llm" ? "测试模型"
+    : path === "/api/batches" ? "创建项目"
+    : init.method === "DELETE" ? "删除文件"
+    : init.method === "PUT" ? "保存设置" : "提交任务"
+  return backgroundTasks.run(`${init.method}:${path}:${String(init.body ?? "")}`, title, execute)
 }
 
 const e = encodeURIComponent
@@ -180,7 +199,69 @@ export interface Pipeline {
   llm_ready: boolean
 }
 
+export interface OutputVideo {
+  batch: string
+  id: string
+  title: string
+  updated: number
+  size: number
+}
+
+const legacyOutputVersions = new Map<string, number>()
+let pendingOutputs: Promise<OutputVideo[]> | null = null
+
+async function loadOutputs(): Promise<OutputVideo[]> {
+  try {
+    return await request<OutputVideo[]>("/api/outputs", { cache: "no-store" })
+  } catch (error) {
+    if (!(error instanceof ApiError) || error.status !== 404) throw error
+  }
+  // 老服务可能仍在出片，不能为了更新接口重启它；直接读取每条脚本的完成状态。
+  const [batches, jobs] = await Promise.all([
+    request<Batch[]>("/api/batches", { cache: "no-store" }),
+    request<Job[]>("/api/jobs", { cache: "no-store" }),
+  ])
+  const projects = await Promise.all(batches.map(async ({ batch }) => {
+    try {
+      return await request<Script[]>(`/api/batches/${e(batch)}/scripts`, { cache: "no-store" })
+    } catch (error) {
+      if (error instanceof ApiError && error.status === 404) return [] // 刷新期间项目被删除。
+      throw error
+    }
+  }))
+  const active = jobs.filter((job) => job.status === "running" || job.status === "queued")
+  const ready = projects.flat().filter((script) => script.status === "rendered" && script.has_output &&
+    !active.some((job) => job.title === `${script.id} 出片`))
+  const keys = new Set(ready.map((script) => JSON.stringify([script.batch, script.id])))
+  for (const key of legacyOutputVersions.keys()) {
+    if (!keys.has(key)) legacyOutputVersions.delete(key)
+  }
+  return ready.map((script) => {
+    const key = JSON.stringify([script.batch, script.id])
+    // 旧接口没有文件时间；以首次发现成片的时间标记封面版本，重新生成后更新。
+    const updated = legacyOutputVersions.get(key) ?? Date.now() / 1000
+    legacyOutputVersions.set(key, updated)
+    return { batch: script.batch, id: script.id, title: script.title || script.id, updated, size: 0 }
+  }).sort((a, b) => b.updated - a.updated || a.id.localeCompare(b.id))
+}
+
+function readOutputs() {
+  if (!pendingOutputs) pendingOutputs = loadOutputs().finally(() => { pendingOutputs = null })
+  return pendingOutputs
+}
+
+async function keepPreviewImage(name: string) {
+  const response = await fetch(`/api/look/file/${e(name)}`, { cache: "no-store" })
+  if (!response.ok) throw new Error("预览图片读取失败，请重试")
+  return URL.createObjectURL(await response.blob())
+}
+
 export const api = {
+  outputs: readOutputs,
+  deleteOutput: (batch: string, id: string) =>
+    request<{ ok: boolean }>(batch ? `/api/outputs/${e(batch)}/${e(id)}` : `/api/root_outputs/${e(id)}`, { method: "DELETE" }),
+  exportOutputs: (items: Pick<OutputVideo, "batch" | "id">[]) =>
+    request<{ url: string }>("/api/outputs/export", { method: "POST", body: JSON.stringify({ items }) }),
   pipeline: () => request<Pipeline>("/api/pipeline"),
   savePipeline: (changes: Record<string, unknown>) =>
     request<{ saved: Record<string, unknown>; pipeline: Pipeline }>("/api/pipeline", { method: "PUT", body: JSON.stringify({ changes }) }),
@@ -207,9 +288,14 @@ export const api = {
   /** 美颜调色强度（批量出片都用这个） */
   getLook: () => request<{ settings: LookSettings; defaults: LookSettings }>("/api/look"),
   saveLook: (s: LookSettings) => request<{ settings: LookSettings }>("/api/look", { method: "PUT", body: JSON.stringify(s) }),
-  lookPreview: (batch: string, kind: "face" | "watch", settings: LookSettings, index = 0) =>
-    request<{ kind: "face" | "watch"; original: string; beauty: string; frames: string[]; index: number; count: number }>(
-      "/api/look/preview", { method: "POST", body: JSON.stringify({ batch, kind, settings, index }) }),
+  lookPreview: async (source: Pick<OutputVideo, "batch" | "id"> | null, kind: "face" | "watch", settings: LookSettings) => {
+    const result = await request<{ kind: "face" | "watch"; original: string; beauty: string; source?: "cover" | "default"; fallback?: boolean }>(
+      "/api/look/preview", { method: "POST", body: JSON.stringify({ source, kind, settings }) })
+    if (result.source) return { ...result, source: result.source, fallback: result.fallback ?? false }
+    // 旧服务只保留最近一次的文件；在浏览器内保存图片，返回页面或调回之前的强度时仍能显示。
+    const [original, beauty] = await Promise.all([keepPreviewImage(result.original), keepPreviewImage(result.beauty)])
+    return { ...result, original, beauty, source: "default" as const, fallback: source !== null }
+  },
   ttsPreview: (text: string, engine?: string, ctx?: { batch: string; script_id: string; voice_source?: string; voice_ref?: VoiceRef }) =>
     request<Job>("/api/tts/preview", { method: "POST", body: JSON.stringify({ text, engine, ...ctx }) }),
   voiceRef: (b: string, id: string) =>
@@ -226,9 +312,9 @@ export const api = {
 export const urls = {
   thumb: (b: string, clip: string, t: number) => `/api/thumb?batch=${e(b)}&clip=${e(clip)}&t=${t.toFixed(1)}`,
   // c=cover：缩略图改成做好的封面后换个地址，浏览器不再用以前缓存的截帧（服务端现在会带 no-cache）
-  outputThumb: (b: string, id: string) => `/api/output_thumb/${e(b)}/${e(id)}.jpg?c=cover`,
-  output: (b: string, id: string) => `/api/outputs/${e(b)}/${e(id)}.mp4`,
-  lookFile: (name: string) => `/api/look/file/${e(name)}`,
+  outputThumb: (b: string, id: string) => b ? `/api/output_thumb/${e(b)}/${e(id)}.jpg?c=cover` : `/api/root_output_thumb/${e(id)}.jpg?c=cover`,
+  output: (b: string, id: string) => b ? `/api/outputs/${e(b)}/${e(id)}.mp4` : `/api/root_outputs/${e(id)}.mp4`,
+  lookFile: (name: string) => name.startsWith("blob:") ? name : `/api/look/file/${e(name)}`,
   sourceClip: (b: string, l: Line) =>
     `/api/preview_clip?batch=${e(b)}&clip=${e(l.clip)}&start=${l.start}&end=${l.end}`,
   ttsFile: (path: string) => `/api/tts/file?path=${e(path)}`,

@@ -340,7 +340,7 @@ def dub_clip(batch: str, clip: str, progress=None, engine: str | None = None) ->
     track, placed = build_voice(t, lines, engine, ref, ref_lang, wd, progress)
     total = len(track) / SR
     mix_wav = mix(track, vocals, background, wd, f"mix_{engine}.wav")
-    out_dir = config.data_root() / "outputs" / batch
+    out_dir = config.output_root() / batch
     out_dir.mkdir(parents=True, exist_ok=True)
     out = out_dir / f"{Path(clip).stem}_粤语_{ENGINE_NAMES[engine]}.mp4"
     render_video(clip_path, mix_wav, placed, total, wd, out, progress, tag=engine)
