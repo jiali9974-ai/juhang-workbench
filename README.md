@@ -67,6 +67,13 @@ Ming 用固定种子先生成一段粤语音色样本，之后每句都参考它
 - 这个中转站不支持 `response_format` 参数（带了会 502），所以 `json_response_format: false`，靠提示词要求只输出 JSON。
 - 换回 DeepSeek：`base_url` 改 `https://api.deepseek.com`，`model` 改 `deepseek-chat`，`api_key_env` 改 `JH_DEEPSEEK_API_KEY`。
 
+## 流程图和换模型
+
+底部导航最右边的「流程图」：以思维导图展示「剪辑成片」「整条转粤语」两条流程的每一步和用的模型。
+点开一步就能换模型（识别模型和运行设备、大模型主模型和备用模型、配音引擎、Ming 模型文件、背景分离模型、视频编码器），
+大模型可以一键「测试」能不能用。改动直接写回 `config.yaml` 对应那一行（注释不动），下一次生成生效；
+识别模型和 Ming 模型要在没有任务在跑时才能换。接口在 `jh/pipeline.py`。
+
 ## 配置
 
 都在 `config.yaml`：素材路径、字幕字号位置、角标文字、放大倍数、背景音乐、配音音色等。

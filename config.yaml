@@ -26,6 +26,7 @@ llm:
   # api_key_env 改 JH_DEEPSEEK_API_KEY（secrets.yaml 里还留着旧 Key）
 
 script:
+  dub_mandarin: false                     # 普通话的句子要不要转粤语配音。false = 全部保留素材原声，普通话字幕写普通话（2026-11-17 起）
   min_seconds: 25                         # 每条成片的时长范围（按选中句子的原声时长算）
   max_seconds: 45
   # 语音识别常见错字 → 正确写法。大模型写字幕时会按这张表改，你们可以随时补充
@@ -73,15 +74,49 @@ tts:
     api_key_env: "JH_AZURE_TTS_KEY"
 
 render:
+  slip_trim: "audio"                      # 口误怎么处理：audio = 只删声音（换成环境底噪），画面不剪；cut = 画面一起剪（跳剪）
+  segment_gap: {first_lead: 0.02, lead: 0.02, tail: 0.02}   # 片段之间：说完最后一个字留 0.02 秒、下一段开口前留 0.02 秒；成片开头开口前留 0.02 秒（直接说话开场）
   width: 1440
   height: 2560
   fps: 60
   encoder: "h264_nvenc"                   # 没有 N 卡时改 libx264
-  bitrate: "20M"
+  bitrate: "30M"                          # 成片码率（原来 20M；1440×2560 60fps 用 30M 更清楚）
+  segment_bitrate: "60M"                  # 中间片段码率（成片还要再编码一次，中间给足码率少丢细节）
   talk_zoom: 1.0                          # 有人脸的镜头放大倍数
   product_zoom: 1.25                      # 没有人脸（手持表特写）的镜头放大倍数
-  bgm: ""                                 # 背景音乐文件，留空则不加
-  bgm_volume: 0.18
+  # ---- 声音和封面：照参考视频（微信 f86544a3…，老虎迪）量出来的 ----
+  audio_master: "voice_bgm"               # voice_bgm = 人声两遍标准化 + 背景音乐循环铺满、固定比人声低一截（不压低）；留空用旧的混法
+  voice_lufs: -11                         # 人声响度（参考视频人声约 -10.7 LUFS，抖音口播普遍偏响）
+  bgm: "D:/巨航/workbench/data/bgm/The_New_Opportunity_LEXMusic.wav"   # 参考视频用的歌：LEXMusic《The New Opportunity》，从你录的 1 分钟录屏里取的（73 秒，从第一拍开始）
+  bgm_below_lu: 12                        # 背景音乐比人声低多少（参考视频约 12 LU，说话时约低 18dB）
+  bgm_bpm: 117.5                         # 背景音乐的速度（分析参考视频得到）：按整小节循环，接头处节奏不断；换歌要跟着改，不知道就写 0
+  bgm_volume: 0.18                        # 旧混法用的音量，新混法不用
+  look:                                   # 美颜和调色。2026-11-17 起强度在工作台「美颜」面板里调（存在 data/settings/look.json，见 jh/look.py），下面这几行只是记录当初的数值，出片不再读
+    enabled: true
+    # 提亮中间调和暗部（人脸），高光只轻提不过曝；近白处拉到纯白；饱和度 +8%；中间调偏红、减绿（肤色更粉）
+    tone: "curves=master='0/0 0.12/0.155 0.35/0.465 0.6/0.68 0.85/0.885 1/1',colorlevels=rimax=0.97:gimax=0.97:bimax=0.97,eq=saturation=1.08,colorbalance=rm=0.06:gm=-0.03:bm=0.0:bh=0.01"
+    # 磨皮：保边的双边滤波，只处理亮度，只在有人脸的时间段打开。2026-11-17 调轻（原来 14/0.10 会把眼睛眼镜也磨糊）：
+    # 皮肤纹理少约 30%，眼睛、眉毛、眼镜的细节基本不变
+    smooth: "bilateral=sigmaS=8:sigmaR=0.06:planes=1"
+    # 锐化：只在没有人脸的时间段打开（手表特写更清楚）；人脸上不锐化，免得毛孔又出来
+    sharpen: "unsharp=lx=5:ly=5:la=0.45:cx=5:cy=5:ca=0"
+  normalize:                              # 统一光线（jh/normalize.py）：每条素材按老板脸上皮肤的颜色拉齐亮度和白平衡，再套美颜调色。开关在「美颜调色」面板
+    target_skin: [137.5, 99.0, 84.0]      # 基准肤色 RGB（调色前）= 1234 那批 41 条素材的中位数；调色后皮肤 L*≈58，和参考视频（58.3）一致
+    max_ratio: 1.8                        # 皮肤亮度最多提亮到 1.8 倍 / 压暗到 1/1.8
+    wb: 0.06                              # 白平衡每个通道最多校 ±6%（只校一半偏色：不同人肤色本来不一样）
+  cover:                                  # 封面（成片第一帧 + 另存 _封面.jpg）
+    enabled: true
+    seconds: 0.034                        # 封面在成片开头显示多久（参考视频就第一帧）
+    bg_blur: 6                            # 背景虚化
+    matting_model: "models/BiRefNet-portrait"   # 封面抠人用的模型（data 目录下；BiRefNet-portrait，MIT 可商用）。删掉这个文件夹就退回 mediapipe
+    bg_dim: 0.92
+    outline_ratio: 0.016                  # 人物白描边宽度（画面宽度比例）
+    char_ratio: 0.08                      # 标题每个字约占画面宽度 8%
+    line1_y: 0.469                        # 第一行（白字）中心高度
+    line2_y: 0.527                        # 第二行（绿字 + 下划线）中心高度
+    line1_color: [255, 255, 255]
+    line2_color: [12, 241, 41]            # 参考视频封面的亮绿色
+    underline: true
 
 style:
   # 思源黑体 Heavy：开源可商用（SIL OFL），覆盖嘅、哋、啲等粤语字。微软雅黑商用需要方正授权，不要用
@@ -89,27 +124,43 @@ style:
   font_name: "Source Han Sans CN Heavy"
   font_bold: 0                            # 字体本身已经是粗体，不要再加粗
   # 以下尺寸按参考成片（1440×2560）量出来的；ASS 字号≈字宽×1.45
-  subtitle:
-    size: 195                             # 字宽约 135px，约画面宽度 9.4%
-    y_ratio: 0.68                         # 字幕中心在画面高度的比例
-    max_chars_per_line: 8
+  subtitle:                               # 照新参考视频（2026-11-17）：一行字幕，字宽约画面 7%，中心在 74.5% 高度
+    size: 146                             # 字宽约 100px（1440 宽）；旧参考是 195
+    y_ratio: 0.745
+    max_chars_per_line: 13                # 一行最多约 13 个字
+    lines: 1                              # 一屏只显示一行（旧样式是两行）
     color: "&H00FFFFFF"
     outline_color: "&H00000000"
-    outline: 10
+    outline: 6                            # 细黑边
+    shadow: 4                             # 柔和的黑色阴影
+    spacing: 1
   slogan:                                 # 左上角竖排黄字，每一项是一列，从左到右
-    columns: ["先鉴定后入手", "只做正品"]
-    size: 135
+    enabled: false                        # 2026-11-17 起不要了（照新参考视频，只保留字幕）；改 true 就恢复
+    columns: ["巨航奢品", "只做正品", "八家门店", "假一罚十"]
+    size: 100                             # 4 列比参考成片的 2 列多，字号从 135 调小
     color: "&H0000E6FF"                   # ASS 颜色是 BGR，这里是黄色 #FFE600
     outline_color: "&H007E231A"           # 深蓝描边
-    x: 112                                # 第一列左边距
-    y: 90                                 # 第一行顶部
-    column_gap: 122
+    x: 80                                 # 第一列左边距
+    y: 70                                 # 第一行顶部
+    column_gap: 92
   disclaimer:
+    enabled: false                        # 2026-11-17 起不要了（只保留字幕）；改 true 就恢复
     text: "此视频不做任何营销行为"
     size: 139                             # 整行约占画面宽度 73%
     y_ratio: 0.953
     color: "&H10FFFFFF"
     outline_color: "&H00D03F6A"           # 紫色描边
+
+dub:                                      # 整条视频转粤语（不剪辑，原画面 + 粤语配音 + 粤语字幕）
+  max_chars_per_second: 6.5               # 翻译贴近原句字数（跟嘴型）；但每秒最多这么多字，免得配音要加快太多
+  max_speedup: 1.3                        # 配音比原句长时最多加快多少倍
+  min_speed: 0.85                         # 配音比原句短时最多放慢到多少倍（每句都对齐到原句说话的时长）
+  max_speedup_by_engine:                  # 个别引擎天生说得慢，允许多加快一点（CosyVoice3 比原片慢约 45%）
+    cosyvoice3: 1.6
+  keep_bgm: true                          # 用 Demucs 把原视频的人声分离掉，保留背景音乐和环境声
+  demucs_model: "htdemucs"
+  # 原视频烧进去的普通话字幕位置（画面比例 x, y, 宽, 高），这块会模糊掉，粤语字幕正好压在上面；没有旧字幕就写 []
+  cover_old_subtitles: [0.14, 0.733, 0.72, 0.045]
 
 cloud:                                    # AutoDL 云端 ComfyUI（产品图生视频用）
   ssh_host: "jh-autodl"                   # ~/.ssh/config 里的主机别名，用专用密钥登录
@@ -129,7 +180,8 @@ tvc:                                      # 产品图生视频
     cfg: 1.0
   h3:
     unet: "minimax_h3_fl2va_pruned_int8_convrot.safetensors"
-    clip: "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"
+    clip: "qwen3vl_32b_minimax_h3_nvfp4_awq.safetensors"          # RTX 50 系（Blackwell）用 NVFP4，省显存
+    clip_other_gpu: "qwen3vl_32b_minimax_h3_int8_convrot.safetensors"   # 3090/4090 等不支持 NVFP4 的卡自动换这个
     video_vae: "minimax_h3_video_vae_fp16.safetensors"
     audio_vae: "minimax_h3_audio_vae_fp32.safetensors"
     turbo_lora: "minimax_h3_fl2v_turbo_8step_v1.0_comfyui_bf16.safetensors"
@@ -137,3 +189,14 @@ tvc:                                      # 产品图生视频
     steps_turbo: 8
     steps_full: 20
   caption_clip: "qwen3vl_8b_int8_convrot.safetensors"   # 识别产品用的 Qwen3-VL
+  default_style: "presenter"              # presenter = 口播带货（照参考作品）；typography = 产品贴字 TVC
+  presenter:                              # 口播带货：虚拟主播出镜 + 手持特写 + 粤语配音字幕
+    shots: 6                              # 镜头数（5–7）：主播开场 → 手持特写 → 主播收尾
+    min_seconds: 3.0                      # 每个镜头最短 / 最长秒数（按配音长度自动定）
+    max_seconds: 7.0
+    line_gap: 0.12                        # 同一镜头里两句配音之间的停顿
+    same_last_frame: true                 # 关键帧同时当首帧和尾帧：动作只能回到原位，手表不会越转越变形
+    speak_lines: true                     # 主播镜头让 H3 里的人真的说这句粤语台词（之后换成 Ming 配音），口型和配音对得上
+    voice_lufs: -16                       # 成片配音响度（两遍标准化，不抽动）
+    ambience_db: -18                      # H3 生成的店内环境声（去掉人声）比配音低多少 dB 垫在下面；写 null 就不垫
+    portrait_prompt: "手机竖屏实拍的半身画面，像抖音口播视频的截图。一位三十多岁的华人男士，短黑发，干净利落，穿浅灰色亚麻衬衫，站在名表店的玻璃柜台前，面对镜头自然微笑，双手放在身前，自然光，背景轻微虚化，真实皮肤质感。画面中不要出现任何文字、字幕、水印。"

@@ -57,8 +57,8 @@
 }
 
 :root {
-    /* 浅色主题：象牙白底、白色卡片、金色点缀、深墨色文字 */
-    --background: oklch(0.975 0.006 85);
+    /* 浅色主题：纯白底、白色卡片、黑白为主、金色少量点缀 */
+    --background: oklch(1 0 0);
     --foreground: oklch(0.25 0.02 260);
     --card: oklch(1 0 0);
     --card-foreground: oklch(0.25 0.02 260);
@@ -66,15 +66,15 @@
     --popover-foreground: oklch(0.25 0.02 260);
     --primary: oklch(0.7 0.13 78);
     --primary-foreground: oklch(0.22 0.04 70);
-    --secondary: oklch(0.955 0.008 85);
+    --secondary: oklch(0.967 0 0);
     --secondary-foreground: oklch(0.3 0.02 260);
-    --muted: oklch(0.955 0.007 85);
+    --muted: oklch(0.967 0 0);
     --muted-foreground: oklch(0.53 0.015 260);
     --accent: oklch(0.96 0.02 85);
     --accent-foreground: oklch(0.3 0.03 70);
     --destructive: oklch(0.58 0.2 27);
-    --border: oklch(0.905 0.01 85);
-    --input: oklch(0.885 0.01 85);
+    --border: oklch(0.922 0 0);
+    --input: oklch(0.9 0 0);
     --ring: oklch(0.7 0.13 78 / 55%);
     --chart-1: oklch(0.58 0.14 250);
     --chart-2: oklch(0.65 0.16 45);

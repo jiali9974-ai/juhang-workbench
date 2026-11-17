@@ -50,6 +50,17 @@ def _cosyvoice():
         if str(p) not in sys.path:
             sys.path.insert(0, str(p))
     from cosyvoice.cli.cosyvoice import AutoModel  # noqa: E402
+    import cosyvoice.llm.llm as cv_llm  # noqa: E402
+
+    def forward_one_step(self, xs, masks, cache=None):
+        # CosyVoice 逐个生成语音 token 时只传了“最后一个位置”的 attention_mask。旧版 transformers（4.51）会忽略它，
+        # 新版（这台机器 4.57）会照它把前面所有位置遮掉，模型看不到要读的文字，于是生成乱码。
+        # 单句推理没有 padding，不需要 mask，直接不传。
+        outs = self.model(inputs_embeds=xs, attention_mask=None, output_hidden_states=True, return_dict=True,
+                          use_cache=True, past_key_values=cache)
+        return outs.hidden_states[-1], outs.past_key_values
+
+    cv_llm.Qwen2Encoder.forward_one_step = forward_one_step
 
     cfg = config.load()["tts"]["cosyvoice3"]
     return AutoModel(model_dir=str(repo / cfg["model_dir"]))
@@ -124,7 +135,10 @@ def cantonese_tts_text(text: str) -> str:
     """配音前的读法整理：型号等 3 位以上数字逐位读（126334 → 一二六三三四），小数字读成中文（41 → 四十一）。"""
     import re
 
+    # 型号后缀、缩写这类 2–4 个大写字母逐个字母读，和数字、汉字隔开（116710LN → 116710 L N，GMT → G M T）
+    text = re.sub(r"(?<![A-Za-z])([A-Z]{2,4})(?![A-Za-z])", lambda m: " " + " ".join(m.group(1)) + " ", text)
     text = re.sub(r"\d{3,}", lambda m: m.group(0).translate(_DIGITS), text)   # 型号、年份逐位读
+    text = re.sub(r" {2,}", " ", text)
     text = re.sub(r"\d{1,2}", lambda m: _small_int(int(m.group(0))), text)    # 表径等小数字
     return text.strip()
 
@@ -224,7 +238,8 @@ def synthesize(text: str, engine: str | None = None, ref_wav: Path | None = None
     key = _voice_key(engine)
     if ref_wav and engine in ("ming", "cosyvoice3"):
         key += "|ref:" + hashlib.md5(Path(ref_wav).read_bytes()).hexdigest() + "|" + str(ref_lang == "yue")
-    out = _cache_path(engine, key, text)
+    # Ming 按整理后的读法做缓存键：读法规则改了，旧缓存自动失效
+    out = _cache_path(engine, key, cantonese_tts_text(text) if engine == "ming" else text)
     if out.exists():
         return out
     if engine == "cosyvoice3":

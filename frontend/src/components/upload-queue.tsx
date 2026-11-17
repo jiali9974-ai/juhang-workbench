@@ -16,12 +16,17 @@ export interface UploadItem {
   speed?: number
 }
 
-/** 上传队列：一次传一个文件，传完一个回调一次（页面据此刷新素材列表） */
+/**
+ * 上传队列：一次传一个文件，传完一个回调一次（页面据此刷新素材列表）。
+ * 首页是先上传、上传时才建项目，所以 add 可以带上刚建好的项目名（这时 batch 参数还没来得及更新）。
+ */
 export function useUploadQueue(batch: string, onUploaded: () => void) {
   const [items, setItems] = useState<UploadItem[]>([])
   const running = useRef(false)
   const queue = useRef<UploadItem[]>([])
   const abortCur = useRef<(() => void) | null>(null)
+  const target = useRef(batch)
+  if (batch) target.current = batch
 
   const patch = (key: string, p: Partial<UploadItem>) => setItems((xs) => xs.map((x) => (x.key === key ? { ...x, ...p } : x)))
 
@@ -32,7 +37,7 @@ export function useUploadQueue(batch: string, onUploaded: () => void) {
       const it = queue.current.shift()!
       patch(it.key, { status: "uploading" })
       const t0 = performance.now()
-      const up = uploadClip(batch, it.file, (loaded) => {
+      const up = uploadClip(target.current, it.file, (loaded) => {
         const sec = (performance.now() - t0) / 1000
         patch(it.key, { loaded, speed: sec > 0.5 ? loaded / sec : undefined })
       })
@@ -47,9 +52,10 @@ export function useUploadQueue(batch: string, onUploaded: () => void) {
       abortCur.current = null
     }
     running.current = false
-  }, [batch, onUploaded])
+  }, [onUploaded])
 
-  const add = useCallback((files: FileList | File[]) => {
+  const add = useCallback((files: FileList | File[], into?: string) => {
+    if (into) target.current = into
     const list = Array.from(files)
     const bad = list.filter((f) => !isVideo(f))
     if (bad.length) toast.error(`跳过 ${bad.length} 个不是视频的文件`, { description: "支持 .mov / .mp4 / .m4v" })

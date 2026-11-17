@@ -177,11 +177,19 @@ def output_thumb(batch: str, sid: str):
     src = config.data_root() / "outputs" / batch / f"{sid}.mp4"
     if not src.exists():
         raise HTTPException(404)
-    out = config.data_root() / "thumbs" / batch / f"out_{sid}_{int(src.stat().st_mtime)}.jpg"
-    if not out.exists():
-        out.parent.mkdir(parents=True, exist_ok=True)
-        media.run_ffmpeg(["-ss", "1.5", "-i", str(src), "-frames:v", "1", "-vf", "scale=270:480", "-q:v", "4", str(out)])
-    return FileResponse(out, media_type="image/jpeg")
+    cover = src.with_name(f"{sid}_封面.jpg")
+    if cover.exists():                                   # 有做好的封面就用封面，没有才从成片截一帧
+        out = config.data_root() / "thumbs" / batch / f"cover_{sid}_{int(cover.stat().st_mtime)}.jpg"
+        if not out.exists():
+            out.parent.mkdir(parents=True, exist_ok=True)
+            media.run_ffmpeg(["-i", str(cover), "-vf", "scale=270:480", "-q:v", "3", str(out)])
+    else:
+        out = config.data_root() / "thumbs" / batch / f"out_{sid}_{int(src.stat().st_mtime)}.jpg"
+        if not out.exists():
+            out.parent.mkdir(parents=True, exist_ok=True)
+            media.run_ffmpeg(["-ss", "1.5", "-i", str(src), "-frames:v", "1", "-vf", "scale=270:480", "-q:v", "4", str(out)])
+    # 封面重做后地址不变：让浏览器每次都来问一下，不用旧图
+    return FileResponse(out, media_type="image/jpeg", headers={"Cache-Control": "no-cache"})
 
 
 # ---------------- 素材剪辑项目：新建、上传素材 ----------------
@@ -257,7 +265,10 @@ def _import_folder(batch: str, src: str, progress=None) -> dict:
         if progress:
             progress(i, len(files), f"加载 {f.name}（{i + 1}/{len(files)}）")
         rel = f.relative_to(root)
-        name = _safe_name("_".join(rel.parts))          # 子文件夹里的文件：文件夹名_文件名，避免重名
+        # 子文件夹里的文件：文件夹名_文件名，避免重名。文件夹名很长时只截前面的名字，扩展名一定保留（以前会把 .MOV 截掉）
+        raw = "_".join(rel.parts[:-1] + (f.stem,))
+        stem = "".join(c for c in raw if c not in _BAD_NAME and ord(c) >= 32).strip(" .")[: 80 - len(f.suffix)] or "clip"
+        name = stem + f.suffix
         target, n = dst / name, 1
         while target.exists():
             if target.stat().st_size == f.stat().st_size:
@@ -361,16 +372,56 @@ def render_script(batch: str, sid: str):
 
 
 @app.post("/api/batches/{batch}/render_all")
-def render_all(batch: str):
-    """把这一批还没出片的脚本全部排队出片。"""
+def render_all(batch: str, data: dict = Body(default={})):
+    """把这一批还没出片的脚本全部排队出片。all=true 时已出片的也重新出（比如调了美颜之后）。"""
     queued = []
+    redo = bool((data or {}).get("all"))
     for s in scriptmod.list_scripts(batch):
-        if s.get("status") == "rendered":
+        if s.get("status") == "rendered" and not redo:
             continue
         s["status"] = "approved"
         scriptmod.save(s)
         queued.append(render_script(batch, s["id"]))
     return queued
+
+
+# ---------------- 美颜和调色强度（页面上调，批量出片都用这个） ----------------
+
+@app.get("/api/look")
+def get_look():
+    from jh import look
+
+    return {"settings": look.current(), "defaults": look.DEFAULTS}
+
+
+@app.put("/api/look")
+def put_look(data: dict = Body(...)):
+    from jh import look
+
+    return {"settings": look.save(data)}
+
+
+@app.post("/api/look/preview")
+def look_preview(data: dict = Body(...)):
+    """出一组对比图（原片 / 按当前滑块设置美颜后），kind = face（人脸）或 watch（手表特写）。"""
+    from jh import look
+
+    batch = str(data.get("batch") or "")
+    _batch_dir(batch)
+    try:
+        return look.preview(batch, str(data.get("kind") or "face"), data.get("settings"), int(data.get("index") or 0))
+    except RuntimeError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/look/file/{name}")
+def look_file(name: str):
+    from jh import look
+
+    f = (look._preview_dir() / name).resolve()
+    if look._preview_dir().resolve() not in f.parents or not f.is_file():
+        raise HTTPException(404)
+    return FileResponse(f, media_type="image/jpeg")
 
 
 @app.get("/api/preview_clip")
@@ -397,7 +448,7 @@ def auto(batch: str):
     def run(p):
         ts = asr.transcribe_folder(folder, _transcript_dir(batch), lambda i, n, m: p(i, n * 3, f"识别 {m}"))
         p(1, 3, "大模型出剪辑脚本中")
-        scripts = scriptmod.generate(batch, ts)
+        scripts = scriptmod.generate(batch, ts, lambda i, n, m: p(1 + (i / n if n else 0), 3, m))
         scriptmod.archive_batch(batch)
         for s in scripts:
             s["status"] = "approved"
@@ -480,8 +531,8 @@ def tts_engines():
         "engines": [
             {"id": "ming", "name": "Ming-3.0 粤语", "available": ming["available"], "running": ming["running"],
              "note": "工作台自动启动，约占 2–3GB 显存" if ming["available"] else ming["message"]},
-            {"id": "cosyvoice3", "name": "CosyVoice3", "available": cv_ok, "running": False,
-             "note": "本地模型" if cv_ok else "模型还在下载"},
+            {"id": "cosyvoice3", "name": "CosyVoice3", "available": cv_ok and not cfg["cosyvoice3"].get("broken"), "running": False,
+             "note": cfg["cosyvoice3"].get("broken") or ("本地模型" if cv_ok else "模型还在下载")},
             {"id": "azure", "name": "Azure 粤语", "available": bool(config.secret(cfg["azure"]["api_key_env"])),
              "running": False, "note": "需要在 secrets.yaml 填 Key"},
         ],
@@ -541,7 +592,7 @@ def tvc_create(data: dict = Body(...)):
         raise HTTPException(400, "请填写产品名称")
     if not data.get("image"):
         raise HTTPException(400, "请上传产品图")
-    p = tvc.create(data["image"], data.get("filename") or "product.png", brief)
+    p = tvc.create(data["image"], data.get("filename") or "product.png", brief, data.get("style"))
     until = data.get("until")
     job = None
     if until in ("keyframes", "final"):
@@ -567,6 +618,22 @@ def tvc_save_plan(pid: str, data: dict = Body(...)):
 
     p = tvc.load(pid)
     old = p.get("plan") or {}
+    if tvc.style_of(p) == "presenter":
+        olds = old.get("shots", [])
+        for i, sh in enumerate(data.get("shots", [])):
+            if i >= len(olds):
+                continue
+            sh["lines"] = [str(x).strip() for x in sh.get("lines") or [] if str(x).strip()]
+            if sh.get("image_prompt") != olds[i].get("image_prompt"):
+                p["keyframes"][i]["status"] = "stale" if p["keyframes"][i].get("file") else "pending"
+                if p["segments"][i].get("file"):
+                    p["segments"][i]["status"] = "stale"
+            if sh.get("video_prompt") != olds[i].get("video_prompt") and p["segments"][i].get("file"):
+                p["segments"][i]["status"] = "stale"
+            # 文案改了：下次合成前会自动重新配音（配音变长、视频不够长时那个镜头会标成需重做）
+        p["plan"] = data
+        p["final"] = None
+        return tvc.save(p)
     for i, k in enumerate(data.get("keyframes", [])):
         if i < len(old.get("keyframes", [])) and k.get("image_prompt") != old["keyframes"][i].get("image_prompt"):
             p["keyframes"][i]["status"] = "stale" if p["keyframes"][i].get("file") else "pending"
@@ -630,9 +697,91 @@ def tvc_file(pid: str, name: str):
     if tvc.pdir(pid).resolve() not in f.parents or not f.is_file():
         raise HTTPException(404)
     media_type = {".mp4": "video/mp4", ".png": "image/png", ".jpg": "image/jpeg", ".jpeg": "image/jpeg",
-                  ".webp": "image/webp"}.get(f.suffix.lower())
+                  ".webp": "image/webp", ".wav": "audio/wav"}.get(f.suffix.lower())
     return FileResponse(f, media_type=media_type)
 
+
+@app.post("/api/tvc/{pid}/voice")
+def tvc_voice(pid: str):
+    """口播带货：按当前文案重新配音（只重配改过的镜头）。"""
+    from jh import tvc
+
+    return jobs.submit("tvc", "粤语配音", lambda pr: tvc.voiceover(tvc.load(pid), progress=pr)["id"]).to_dict()
+
+
+# ---------------- 虚拟主播（口播带货出镜的人，全工作台共用） ----------------
+
+@app.get("/api/tvc_presenter")
+def presenter_get():
+    from jh import presenter
+
+    return {"presenter": presenter.get(), "default_prompt": presenter.default_prompt()}
+
+
+@app.post("/api/tvc_presenter/generate")
+def presenter_generate(data: dict = Body(default={})):
+    from jh import presenter
+
+    prompt = str(data.get("prompt") or "").strip()
+    return jobs.submit("tvc", "生成虚拟主播", lambda pr: presenter.generate(prompt or None)["file"]).to_dict()
+
+
+@app.post("/api/tvc_presenter/upload")
+def presenter_upload(data: dict = Body(...)):
+    from jh import presenter
+
+    if not data.get("image"):
+        raise HTTPException(400, "请选择一张照片")
+    return presenter.upload(data["image"], data.get("filename") or "presenter.png")
+
+
+@app.get("/api/tvc_presenter/file/{name}")
+def presenter_file(name: str):
+    from jh import presenter
+
+    f = (presenter.pdir() / name).resolve()
+    if presenter.pdir().resolve() not in f.parents or not f.is_file():
+        raise HTTPException(404)
+    return FileResponse(f)
+
+
+
+# ---------------- 整条转粤语（不剪辑） ----------------
+
+@app.post("/api/batches/{batch}/dub_full")
+def dub_full(batch: str, data: dict = Body(default={})):
+    """已经剪好的普通话成片：画面不动，整条换成粤语配音和粤语字幕。clips 不传就处理这个项目里的全部视频。"""
+    from jh import dub
+
+    _batch_dir(batch)
+    clips = data.get("clips") or None
+    engine = data.get("engine") or config.load()["tts"]["engine"]
+    if engine not in dub.ENGINE_NAMES:
+        raise HTTPException(400, f"未知的配音引擎：{engine}")
+    if engine == "azure" and not config.secret(config.load()["tts"]["azure"]["api_key_env"]):
+        raise HTTPException(400, "Azure 还没有 Key：在 secrets.yaml 里填 JH_AZURE_TTS_KEY")
+    return jobs.submit("dub", f"{batch} 整条转粤语（{dub.ENGINE_NAMES[engine]}）",
+                       lambda pr: dub.dub_batch(batch, clips, pr, engine)).to_dict()
+
+
+@app.get("/api/batches/{batch}/dubs")
+def list_dubs(batch: str):
+    """这个项目里已经整条转好粤语的视频（新的在前）。"""
+    root = config.data_root() / "dub" / batch
+    out = []
+    for f in root.glob("*/dub*.json") if root.exists() else []:
+        try:
+            m = json.loads(f.read_text(encoding="utf-8"))
+        except json.JSONDecodeError:
+            continue
+        o = Path(m.get("output", ""))
+        if not o.exists():
+            continue
+        st = o.stat()
+        out.append({"clip": m["clip"], "id": o.stem, "engine": m.get("engine"), "duration": m.get("duration"),
+                    "sentences": m.get("sentences"), "max_speed": m.get("max_speed"), "min_speed": m.get("min_speed"),
+                    "updated": st.st_mtime, "size": st.st_size})
+    return sorted(out, key=lambda x: -x["updated"])
 
 
 # ---------------- 删除项目（挪进回收站，可以恢复） ----------------
@@ -688,5 +837,57 @@ def delete_tvc(pid: str):
 
 
 
+# ---------------- 流程图：每一步用的模型，网页上直接改 ----------------
+
+# 这几项要重新加载模型，有任务在跑时不让改
+_NEEDS_IDLE = {"asr.sensevoice_dir", "asr.device", "tts.ming.model"}
+
+
+@app.get("/api/pipeline")
+def pipeline_get():
+    from jh import pipeline
+
+    return pipeline.describe()
+
+
+@app.put("/api/pipeline")
+def pipeline_put(data: dict = Body(...)):
+    from jh import pipeline
+
+    changes = (data or {}).get("changes") or {}
+    if _NEEDS_IDLE & set(changes) and jobs.busy():
+        raise HTTPException(409, "有任务在跑，识别模型和 Ming 模型要等任务跑完再换（其他模型现在就能改）")
+    try:
+        saved = pipeline.update(changes)
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+    return {"saved": saved, "pipeline": pipeline.describe()}
+
+
+@app.post("/api/pipeline/llm_models")
+def pipeline_llm_models():
+    """重新向中转站要一次模型列表。"""
+    from jh import pipeline
+
+    models, err = pipeline.llm_models(force=True)
+    return {"models": models, "error": err}
+
+
+@app.post("/api/pipeline/test_llm")
+def pipeline_test_llm(data: dict = Body(...)):
+    from jh import pipeline
+
+    model = str((data or {}).get("model") or "").strip()
+    if not model:
+        raise HTTPException(400, "请选一个模型")
+    try:
+        return pipeline.test_llm(model)
+    except Exception as e:  # noqa: BLE001
+        raise HTTPException(400, f"{model} 调用失败：{str(e)[:200]}")
+
+
 if __name__ == "__main__":
-    uvicorn.run(app, host="127.0.0.1", port=8765)
+    import os
+
+    # JH_PORT：同时开第二个工作台（比如测试新版本）时换个端口
+    uvicorn.run(app, host="127.0.0.1", port=int(os.environ.get("JH_PORT", "8765")))

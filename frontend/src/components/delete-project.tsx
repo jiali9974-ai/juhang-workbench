@@ -15,6 +15,7 @@ import {
 } from "@/components/ui/alert-dialog"
 import { Button } from "@/components/ui/button"
 import { go } from "@/hooks/use-route"
+import { getCurrent, setCurrent } from "@/lib/current"
 import { cn } from "@/lib/utils"
 
 async function del(kind: "batch" | "tvc", id: string): Promise<{ recycled_to: string }> {
@@ -44,7 +45,8 @@ export function DeleteProject({ kind, id, name, icon, className, current, size =
       setOpen(false)
       toast.success(`已删除「${name}」`, { description: `挪到了回收站：${r.recycled_to}，需要时可以挪回来` })
       window.dispatchEvent(new Event("jh:refresh"))
-      if (current) go(kind === "batch" ? { page: "home" } : { page: "tvc" })
+      if (kind === "batch" && getCurrent() === id) setCurrent(null)
+      if (current) go(kind === "batch" ? { page: "projects" } : { page: "tvc" })
     } catch (e) {
       toast.error("删除失败", { description: String(e).replace(/^Error: /, "") })
     } finally {
@@ -96,8 +98,8 @@ export function ProjectMissing({ kind, name }: { kind: "batch" | "tvc"; name: st
       <div className="grid size-12 place-items-center rounded-xl bg-muted text-muted-foreground"><FolderX className="size-6" /></div>
       <div className="mt-4 text-lg font-semibold">项目「{name}」不存在</div>
       <p className="mt-1 text-sm text-muted-foreground">可能已经被删除（在工作台回收站 data\_recycle 里可以找回），或者链接写错了。</p>
-      <Button variant="outline" className="mt-5" onClick={() => go(kind === "batch" ? { page: "home" } : { page: "tvc" })}>
-        <ArrowLeft />返回{kind === "batch" ? "视频素材剪辑" : "产品图生视频"}
+      <Button variant="outline" className="mt-5" onClick={() => go(kind === "batch" ? { page: "projects" } : { page: "tvc" })}>
+        <ArrowLeft />返回{kind === "batch" ? "全部项目" : "产品图生视频"}
       </Button>
     </div>
   )

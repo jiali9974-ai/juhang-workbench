@@ -33,6 +33,7 @@ import { useJobs } from "@/hooks/use-jobs"
 import { go, href, type Route } from "@/hooks/use-route"
 import { api, type Batch, type Gpu, type Info, type TtsEngine } from "@/lib/api"
 import { minutes } from "@/lib/format"
+import { FEATURES } from "@/lib/features"
 import { tvcApi, tvcFile, type TvcSummary } from "@/lib/tvc"
 import { cn } from "@/lib/utils"
 
@@ -181,11 +182,14 @@ export function AppSidebar({ route }: { route: Route }) {
   }, [])
   useEffect(() => {
     api.batches().then(setBatches).catch(() => {})
-    tvcApi.list().then(setTvcs).catch(() => {})
+    if (FEATURES.productVideo) tvcApi.list().then(setTvcs).catch(() => {})
   }, [version, route])
   useEffect(() => {
     // 上传、加载文件夹完成后页面会发这个事件，侧边栏跟着刷新素材数量
-    const on = () => { api.batches().then(setBatches).catch(() => {}); tvcApi.list().then(setTvcs).catch(() => {}) }
+    const on = () => {
+      api.batches().then(setBatches).catch(() => {})
+      if (FEATURES.productVideo) tvcApi.list().then(setTvcs).catch(() => {})
+    }
     window.addEventListener("jh:refresh", on)
     return () => window.removeEventListener("jh:refresh", on)
   }, [])
@@ -247,8 +251,8 @@ export function AppSidebar({ route }: { route: Route }) {
           <SidebarGroupLabel>创作</SidebarGroupLabel>
           <SidebarGroupContent>
             <SidebarMenu className="gap-1.5">
-              {/* 主线一：产品图生视频 */}
-              <NavSection
+              {/* 主线一：产品图生视频（功能开关关着时不显示） */}
+              {FEATURES.productVideo && <NavSection
                 id="tvc"
                 icon={<Sparkles className="text-gold-ink" />}
                 title="产品图生视频"
@@ -276,7 +280,7 @@ export function AppSidebar({ route }: { route: Route }) {
                     </span>
                   </SubItem>
                 ))}
-              </NavSection>
+              </NavSection>}
 
               {/* 主线二：视频素材剪辑 */}
               <NavSection
@@ -319,7 +323,7 @@ export function AppSidebar({ route }: { route: Route }) {
           <div className="flex items-center gap-2"><AudioLines className="size-3.5" />配音 <b className="ml-auto flex items-center gap-1.5 font-medium text-foreground/80">{engine && <span className={cn("size-1.5 rounded-full", engine.running ? "bg-ok" : engine.available ? "bg-primary" : "bg-muted-foreground/40")} title={engine.running ? "运行中" : engine.note} />}{engine?.name ?? info?.tts ?? "-"}</b></div>
           <div className="flex items-center gap-2"><Bot className="size-3.5" />智能体 <b className="ml-auto font-medium text-foreground/80">{info?.llm ?? "-"}</b>{info && !info.llm_ready && <span className="text-warn">未填 Key</span>}</div>
           <div className="flex items-center gap-2"><HardDrive className="size-3.5" />素材和成片都在本机</div>
-          <div className="flex items-center gap-2"><Cpu className="size-3.5" />产品图生视频在 AutoDL 云端</div>
+          {FEATURES.productVideo && <div className="flex items-center gap-2"><Cpu className="size-3.5" />产品图生视频在 AutoDL 云端</div>}
         </div>
       </SidebarFooter>
       <SidebarRail />

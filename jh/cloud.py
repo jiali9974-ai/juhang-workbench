@@ -97,6 +97,15 @@ def status() -> dict:
     return info
 
 
+def is_blackwell() -> bool:
+    """云端显卡是不是 Blackwell（RTX 50 系、RTX PRO 6000 Blackwell、B200 等）。NVFP4 模型只有这一代能原生跑。
+    AutoDL 每次开机可能分到不同的卡，所以每次现查。"""
+    import re
+
+    name = str(status().get("gpu", ""))
+    return bool(re.search(r"RTX 50\d0|Blackwell|(?<![A-Z])G?B[12]00\b", name))
+
+
 # ---------------- ComfyUI 接口 ----------------
 
 def free_vram() -> None:
@@ -105,13 +114,30 @@ def free_vram() -> None:
     _session().post(base_url() + "/free", json={"unload_models": True, "free_memory": True}, timeout=60)
 
 
+def _retry(send, attempts: int = 4):
+    """隧道偶尔会把新连接直接重置（实测：同一个请求几秒后重发就成功）。连接类错误等一会儿重发，别的错误照常抛出。"""
+    import time
+
+    for i in range(attempts):
+        ensure_tunnel()
+        try:
+            return send()
+        except (requests.ConnectionError, requests.Timeout):
+            if i == attempts - 1:
+                raise
+            time.sleep(3 * (i + 1))
+
+
 def upload_image(path: Path, name: str | None = None) -> str:
     """上传图片到云端 ComfyUI 的 input 目录，返回在工作流里引用的文件名。"""
-    ensure_tunnel()
     name = name or f"jh_{uuid.uuid4().hex[:10]}{path.suffix.lower()}"
-    with open(path, "rb") as f:
-        r = _session().post(base_url() + "/upload/image", files={"image": (name, f, "image/png")},
-                            data={"overwrite": "true", "subfolder": "jh"}, timeout=120)
+    data = path.read_bytes()
+
+    def send():
+        return _session().post(base_url() + "/upload/image", files={"image": (name, data, "image/png")},
+                               data={"overwrite": "true", "subfolder": "jh"}, timeout=120)
+
+    r = _retry(send)
     r.raise_for_status()
     j = r.json()
     return f"{j['subfolder']}/{j['name']}" if j.get("subfolder") else j["name"]
@@ -119,9 +145,8 @@ def upload_image(path: Path, name: str | None = None) -> str:
 
 def run(graph: dict, progress=None, timeout: int = 3600) -> dict:
     """提交一个 API 格式的工作流，等它跑完，返回 history 里的输出。"""
-    ensure_tunnel()
     s = _session()
-    r = s.post(base_url() + "/prompt", json={"prompt": graph, "client_id": "jh-workbench"}, timeout=60)
+    r = _retry(lambda: s.post(base_url() + "/prompt", json={"prompt": graph, "client_id": "jh-workbench"}, timeout=60))
     if r.status_code != 200:
         raise RuntimeError(f"云端拒绝了工作流：{r.text[:600]}")
     pid = r.json()["prompt_id"]

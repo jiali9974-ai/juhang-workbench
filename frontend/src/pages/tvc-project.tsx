@@ -14,6 +14,7 @@ import { useJobs } from "@/hooks/use-jobs"
 import { tvcApi, tvcFile, type CloudStatus, type TvcItem, type TvcPlan, type TvcProject } from "@/lib/tvc"
 import { cn } from "@/lib/utils"
 import { CloudBadge } from "@/pages/tvc-home"
+import { PresenterProject } from "@/pages/tvc-presenter"
 
 const ROLE: Record<string, string> = { hook: "开场", feature: "卖点", hero: "定版" }
 const REF: Record<string, string> = { A: "A 空棚贴字", B: "B 3D 空间功能词", C: "C 环形折叠字" }
@@ -65,6 +66,7 @@ export function TvcProjectPage({ id }: { id: string }) {
   if (!p) {
     return <div className="mx-auto max-w-[1300px] space-y-3 px-8 pt-8"><Skeleton className="h-9 w-72" /><Skeleton className="h-24" /><Skeleton className="h-80" /></div>
   }
+  if (p.style === "presenter") return <PresenterProject p={p} cloud={cloud} reload={load} />
 
   const kfDone = p.keyframes.length > 0 && p.keyframes.every((k) => k.status === "done")
   const segDone = p.segments.length > 0 && p.segments.every((s) => s.status === "done")
@@ -136,11 +138,11 @@ export function TvcProjectPage({ id }: { id: string }) {
         {currentJob && <span className="ml-2 text-xs text-gold-ink"><Loader2 className="mr-1 inline size-3 animate-spin" />{currentJob.message}</span>}
       </div>
 
-      <div className="mt-6 grid gap-6 xl:grid-cols-[300px_1fr]">
+      <div className="mt-6 grid gap-6 lg:grid-cols-[260px_1fr]">
         {/* 左：产品与方案 */}
-        <div className="grid content-start gap-4">
+        <div className="grid content-start gap-4 sm:grid-cols-2 lg:grid-cols-1">
           <div className="soft-shadow overflow-hidden rounded-xl border bg-card">
-            <img src={tvcFile(id, p.product_file)} className="aspect-square w-full bg-muted object-contain" />
+            <img src={tvcFile(id, p.product_file)} className="aspect-square max-h-64 w-full bg-muted object-contain lg:max-h-none" />
             <div className="space-y-1 p-3 text-sm">
               <div className="font-semibold">{p.brief.product}</div>
               {p.brief.brand && <div className="text-xs text-muted-foreground">品牌：{p.brief.brand}</div>}

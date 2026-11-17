@@ -21,7 +21,7 @@ export function JobsDock() {
           animate={{ opacity: 1, y: 0, scale: 1 }}
           exit={{ opacity: 0, y: 24 }}
           transition={{ type: "spring", stiffness: 320, damping: 30 }}
-          className="fixed right-5 bottom-5 z-40 w-[340px] overflow-hidden rounded-2xl border bg-popover/95 lift-shadow backdrop-blur"
+          className="fixed right-5 bottom-5 z-40 max-lg:bottom-24 w-[340px] overflow-hidden rounded-2xl border bg-popover/95 lift-shadow backdrop-blur"
         >
           <motion.button layout="position" className="flex w-full items-center gap-2.5 px-4 py-3 text-left text-[13px] hover:bg-muted/50" onClick={() => setOpen(!open)}>
             <AnimatePresence mode="wait" initial={false}>

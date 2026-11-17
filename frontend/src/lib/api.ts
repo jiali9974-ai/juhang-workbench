@@ -122,7 +122,71 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 const e = encodeURIComponent
 
+/** 整条转好粤语的视频 */
+export interface DubItem {
+  clip: string
+  id: string
+  engine?: string | null
+  min_speed?: number | null
+  duration: number
+  sentences: number
+  max_speed: number
+  updated: number
+  size: number
+}
+
+/** 美颜调色强度：都是 0–1 */
+export interface LookSettings {
+  enabled: boolean
+  /** 统一光线：不同素材先按老板肤色拉齐亮度和白平衡，再调色 */
+  normalize: boolean
+  smooth: number
+  tone: number
+  sharpen: number
+}
+
+/** 流程图：每一步的模型配置 */
+export interface FieldOption {
+  value: string
+  label: string
+  note?: string
+  disabled?: boolean
+}
+export interface PipelineField {
+  key: string | null            // null = 只展示，不能改
+  label: string
+  type: "select" | "list" | "text" | "toggle" | "info"
+  value: string | string[] | boolean
+  options: FieldOption[]
+  note: string
+  custom: boolean               // select 也可以自己填（大模型名）
+}
+export interface PipelineStep {
+  id: string
+  title: string
+  desc: string
+  off?: boolean
+  fields: PipelineField[]
+}
+export interface PipelineBranch {
+  id: string
+  title: string
+  desc: string
+  steps: PipelineStep[]
+}
+export interface Pipeline {
+  root: string
+  branches: PipelineBranch[]
+  llm_ready: boolean
+}
+
 export const api = {
+  pipeline: () => request<Pipeline>("/api/pipeline"),
+  savePipeline: (changes: Record<string, unknown>) =>
+    request<{ saved: Record<string, unknown>; pipeline: Pipeline }>("/api/pipeline", { method: "PUT", body: JSON.stringify({ changes }) }),
+  refreshLlmModels: () => request<{ models: string[]; error: string }>("/api/pipeline/llm_models", { method: "POST" }),
+  testLlm: (model: string) =>
+    request<{ model: string; reply: string; seconds: number }>("/api/pipeline/test_llm", { method: "POST", body: JSON.stringify({ model }) }),
   info: () => request<Info>("/api/info"),
   gpu: () => request<Gpu>("/api/gpu"),
   batches: () => request<Batch[]>("/api/batches"),
@@ -139,20 +203,32 @@ export const api = {
   transcribe: (b: string) => request<Job>(`/api/batches/${e(b)}/transcribe`, { method: "POST" }),
   generate: (b: string) => request<Job>(`/api/batches/${e(b)}/generate`, { method: "POST" }),
   render: (b: string, id: string) => request<Job>(`/api/batches/${e(b)}/scripts/${e(id)}/render`, { method: "POST" }),
-  renderAll: (b: string) => request<Job[]>(`/api/batches/${e(b)}/render_all`, { method: "POST" }),
+  renderAll: (b: string, all = false) => request<Job[]>(`/api/batches/${e(b)}/render_all`, { method: "POST", body: JSON.stringify({ all }) }),
+  /** 美颜调色强度（批量出片都用这个） */
+  getLook: () => request<{ settings: LookSettings; defaults: LookSettings }>("/api/look"),
+  saveLook: (s: LookSettings) => request<{ settings: LookSettings }>("/api/look", { method: "PUT", body: JSON.stringify(s) }),
+  lookPreview: (batch: string, kind: "face" | "watch", settings: LookSettings, index = 0) =>
+    request<{ kind: "face" | "watch"; original: string; beauty: string; frames: string[]; index: number; count: number }>(
+      "/api/look/preview", { method: "POST", body: JSON.stringify({ batch, kind, settings, index }) }),
   ttsPreview: (text: string, engine?: string, ctx?: { batch: string; script_id: string; voice_source?: string; voice_ref?: VoiceRef }) =>
     request<Job>("/api/tts/preview", { method: "POST", body: JSON.stringify({ text, engine, ...ctx }) }),
   voiceRef: (b: string, id: string) =>
     request<{ current: VoiceRef | null; candidates: VoiceRef[] }>(`/api/batches/${e(b)}/scripts/${e(id)}/voice_ref`),
   ttsEngines: () => request<{ default: string; engines: TtsEngine[] }>("/api/tts/engines"),
   auto: (b: string) => request<Job>(`/api/batches/${e(b)}/auto`, { method: "POST" }),
+  /** 整条转粤语（不剪辑）：clips 不传就处理项目里全部视频 */
+  dubFull: (b: string, clips?: string[], engine?: string) =>
+    request<Job>(`/api/batches/${e(b)}/dub_full`, { method: "POST", body: JSON.stringify({ clips, engine }) }),
+  dubs: (b: string) => request<DubItem[]>(`/api/batches/${e(b)}/dubs`),
   jobs: () => request<Job[]>("/api/jobs"),
 }
 
 export const urls = {
   thumb: (b: string, clip: string, t: number) => `/api/thumb?batch=${e(b)}&clip=${e(clip)}&t=${t.toFixed(1)}`,
-  outputThumb: (b: string, id: string) => `/api/output_thumb/${e(b)}/${e(id)}.jpg`,
+  // c=cover：缩略图改成做好的封面后换个地址，浏览器不再用以前缓存的截帧（服务端现在会带 no-cache）
+  outputThumb: (b: string, id: string) => `/api/output_thumb/${e(b)}/${e(id)}.jpg?c=cover`,
   output: (b: string, id: string) => `/api/outputs/${e(b)}/${e(id)}.mp4`,
+  lookFile: (name: string) => `/api/look/file/${e(name)}`,
   sourceClip: (b: string, l: Line) =>
     `/api/preview_clip?batch=${e(b)}&clip=${e(l.clip)}&start=${l.start}&end=${l.end}`,
   ttsFile: (path: string) => `/api/tts/file?path=${e(path)}`,

@@ -1,0 +1,20 @@
+[Unit]
+Description=JH editing workbench (FastAPI on 127.0.0.1:18765, public via nginx :8765)
+After=network.target
+
+[Service]
+User=ubuntu
+WorkingDirectory=/srv/jh-workbench/app
+Environment=JH_CONFIG=/srv/jh-workbench/config.server.yaml
+Environment=PYTHONUNBUFFERED=1
+Environment=MODELSCOPE_CACHE=/srv/jh-workbench/cache/modelscope
+Environment=HF_HOME=/srv/jh-workbench/cache/hf
+ExecStart=/srv/jh-workbench/venv/bin/uvicorn app:app --host 127.0.0.1 --port 18765
+Restart=on-failure
+RestartSec=5
+# 出片很吃 CPU，降低优先级、限制内存，避免影响服务器上其它网站
+Nice=5
+MemoryMax=6G
+
+[Install]
+WantedBy=multi-user.target

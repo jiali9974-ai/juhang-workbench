@@ -255,7 +255,7 @@ export function ScriptEditor({ batch, id }: { batch: string; id: string }) {
   const pvIndex = preview.kind === "source" ? keys.indexOf(preview.key) : -1
 
   return (
-    <div className="mx-auto w-full max-w-[1480px] px-6 pt-5 pb-10 md:px-8">
+    <div className="mx-auto w-full max-w-[1480px] px-6 pt-5 pb-40 md:px-8">
       <button onClick={back} className="group mb-3 inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground">
         <ArrowLeft className="size-4 transition-transform group-hover:-translate-x-0.5" />返回 {batch}
       </button>
@@ -425,7 +425,7 @@ export function ScriptEditor({ batch, id }: { batch: string; id: string }) {
             animate={{ y: 0, opacity: 1 }}
             transition={{ delay: 0.2, duration: 0.4, ease }}
             className={cn(
-              "sticky bottom-4 z-10 mt-4 flex flex-wrap items-center gap-2 rounded-xl border bg-popover/90 px-3 py-2.5 lift-shadow backdrop-blur transition-colors",
+              "sticky bottom-24 z-10 mt-4 flex flex-wrap items-center gap-2 rounded-xl border bg-popover/90 px-3 py-2.5 lift-shadow backdrop-blur transition-colors",
               dirty && "border-warn/50",
             )}
           >

@@ -64,9 +64,15 @@ def h3_graph(prompt: str, first_frame: str, last_frame: str | None, seconds: flo
     h = _c()["h3"]
     w, hh = width or _c()["width"], height or _c()["height"]
     turbo = h.get("use_turbo", True)
+    clip = h["clip"]
+    if h.get("clip_other_gpu") and "nvfp4" in clip:
+        from . import cloud
+
+        if not cloud.is_blackwell():           # 3090/4090 等不支持 NVFP4：换 int8 版文本编码器
+            clip = h["clip_other_gpu"]
     g = {
         "1": {"class_type": "UNETLoader", "inputs": {"unet_name": h["unet"], "weight_dtype": "default"}},
-        "3": {"class_type": "CLIPLoader", "inputs": {"clip_name": h["clip"], "type": "minimax", "device": "default"}},
+        "3": {"class_type": "CLIPLoader", "inputs": {"clip_name": clip, "type": "minimax", "device": "default"}},
         "4": {"class_type": "VAELoader", "inputs": {"vae_name": h["video_vae"]}},
         "5": {"class_type": "VAELoader", "inputs": {"vae_name": h["audio_vae"]}},
         "6": {"class_type": "LoadImage", "inputs": {"image": first_frame}},
