@@ -1,9 +1,9 @@
-"""剪辑智能体：按 skills/edit_script.md 出剪辑脚本，一组素材只调用一次大模型。
+"""剪辑智能体：按 skills/edit_script.md 出剪辑脚本，整批素材统一调用大模型规划。
 
 三个阶段（分析句子 → 逐句质检 → 组合并整体检查，不合格就重选）由大模型在这一次调用里自己做完，只输出最后的脚本。
 程序只做两件不调接口的事：
 - 调用前：量好每句的时长、语速、句中停顿、和上一句首尾重复的字、句内重复、和前几句很像（重说），用“⚠”附在句子后面；
-- 调用后：兜底——去掉不存在的编号和重复的句子、keep 不是“只删字”就退回原话、内容几乎一样的两句只留一句、时长明显不够的整条不要。
+- 调用后：兜底——去掉不存在或重复引用的句子编号、keep 不是“只删字”就退回原话、时长明显不够的整条不要。
 """
 from __future__ import annotations
 
@@ -14,7 +14,6 @@ import re
 from . import config, llm, script as scriptmod
 
 SKILL = config.ROOT / "skills" / "edit_script.md"
-GROUP_SECONDS = 1200         # 素材按人声时长分组交给大模型，每组最多约 20 分钟
 
 
 
@@ -68,14 +67,6 @@ def _similar(a: str, b: str) -> float:
     return difflib.SequenceMatcher(None, a, b, autojunk=False).ratio()
 
 
-def _same_content(a: str, b: str) -> bool:
-    """两段（去掉标点的）文字是不是在讲同一句话：很像，或者短的整段包含在长的里面。"""
-    if min(len(a), len(b)) < 4:
-        return False
-    short, long_ = sorted((a, b), key=len)
-    return _similar(a, b) >= 0.75 or (len(short) >= 5 and short in long_)
-
-
 def _longest_pause(words) -> tuple[float, str]:
     real = [w for w in words or [] if _bare(w[0])]
     best = (0.0, "")
@@ -116,31 +107,15 @@ def sentence_hints(sentences: list[dict]) -> list[list[str]]:
     return out
 
 
-def _groups(transcripts: list[dict]) -> list[list[dict]]:
-    """按拍摄顺序把素材分组，每组人声不超过 GROUP_SECONDS。"""
-    groups, cur, acc = [], [], 0.0
-    for t in transcripts:
-        sp = sum(s["end"] - s["start"] for s in t["sentences"])
-        if cur and acc + sp > GROUP_SECONDS:
-            groups.append(cur)
-            cur, acc = [], 0.0
-        cur.append(t)
-        acc += sp
-    if cur:
-        groups.append(cur)
-    return groups
-
-
 # ---------------- 调用 ----------------
 
-def _ask(batch: str, body: str, done_titles: list[str]) -> dict:
-    done = ("\n\n前面几组素材已经出过这些成片，同一组内容不要再出：\n" + "\n".join(f"- {t}" for t in done_titles)) if done_titles else ""
+def _ask(batch: str, body: str) -> dict:
     last_err = None
     for _ in range(3):
         text = llm.chat([
             {"role": "system", "content": system_prompt()},
-            {"role": "user", "content": f"以下是拍摄批次 {batch} 的一组素材识别结果：\n{body}{done}"},
-        ], json_mode=True, temperature=0.3, max_tokens=16000)
+            {"role": "user", "content": f"以下是拍摄批次 {batch} 的全部素材识别结果，请逐条纳入规划并按内容分组：\n{body}"},
+        ], json_mode=True, temperature=0.3, max_tokens=None)
         try:
             return scriptmod._extract_json(text)
         except ValueError as e:             # 偶尔输出不完整，重试
@@ -151,23 +126,19 @@ def _ask(batch: str, body: str, done_titles: list[str]) -> dict:
 # ---------------- 调用后：兜底 ----------------
 
 def _lines(video: dict, index: dict) -> list[dict]:
-    """模型选的句子 → 剪辑脚本的句子。不存在的编号、重复的句子、和前面内容几乎一样的句子去掉（短的那句让给长的）。"""
+    """模型选句转为脚本：只过滤不存在或重复引用的编号，保留模型选中的不同来源与不同信息。"""
     lines: list[dict] = []
+    seen: set[str] = set()
     for item in video.get("lines") or []:
         if not isinstance(item, dict):
             continue
         ref = str(item.get("ref") or "").strip()
-        if ref not in index or any(l["ref"] == ref for l in lines):
+        if ref not in index or ref in seen:
             continue
+        seen.add(ref)
         t, s = index[ref]
         keep = str(item.get("keep") or "").strip()
         keep = keep if scriptmod.is_deletion_of(keep, s["text"]) else s["text"]
-        kb = _bare(keep)
-        dup = next((l for l in lines if _same_content(_bare(l["keep"]), kb)), None)
-        if dup is not None:
-            if len(kb) <= len(_bare(dup["keep"])):
-                continue                     # 这句是前面说过的话，不要
-            lines.remove(dup)                # 前面那句是这句的一部分：留信息全的这句
         role = item.get("role") if item.get("role") in ("hook", "product", "cta") else "product"
         lines.append({"ref": ref, "clip": t["clip"], "start": s["start"], "end": s["end"], "src_lang": s["lang"],
                       "src_text": s["text"], "keep": keep, "words": s.get("words"),
@@ -176,14 +147,12 @@ def _lines(video: dict, index: dict) -> list[dict]:
 
 
 def generate(batch: str, transcripts: list[dict], progress=None) -> list[dict]:
-    """生成这一批素材的剪辑脚本（草稿）。素材多时分组，每组调用一次大模型。"""
+    """整批素材统一规划脚本（草稿），不按素材条数或人声时长预先拆分、筛掉来源。"""
     index, numbered = {}, {}
     for ci, t in enumerate(transcripts, 1):                    # 全批统一编号
         numbered[t["clip"]] = ci
         for si, s in enumerate(t["sentences"], 1):
             index[f"C{ci}-S{si}"] = (t, s)
-    videos: list[dict] = []
-    groups = _groups(transcripts)                               # 怎么分组（每组表、门店介绍）由 skill 在阶段一按内容自己分
 
     def clip_rows(ts: list[dict]) -> list[str]:
         rows = []
@@ -196,10 +165,11 @@ def generate(batch: str, transcripts: list[dict], progress=None) -> list[dict]:
                             + (f"  ⚠{h}" if h else ""))
         return rows
 
-    for gi, g in enumerate(groups):
-        if progress:
-            progress(gi, len(groups), f"大模型出脚本 {gi + 1}/{len(groups)} 组")
-        videos += _ask(batch, "\n".join(clip_rows(g)), [v.get("title", "") for v in videos]).get("videos", [])
+    if not transcripts:
+        return []
+    if progress:
+        progress(0, 1, f"大模型统一规划全部 {len(transcripts)} 条素材")
+    videos = _ask(batch, "\n".join(clip_rows(transcripts))).get("videos", [])
 
     min_s = config.load().get("script", {}).get("min_seconds", 25)
     scripts = []

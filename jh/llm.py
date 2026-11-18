@@ -28,12 +28,12 @@ def models() -> list[str]:
 
 
 def chat(messages: list[dict], *, json_mode: bool = False, temperature: float | None = None,
-         max_tokens: int = 8000, attempts_per_model: int = 4) -> str:
+         max_tokens: int | None = 8000, attempts_per_model: int = 4) -> str:
     """发一轮对话，返回模型回复的文字。"""
     client = _client()
     last = None
     for model in models():
-        kw: dict = {"max_completion_tokens": max_tokens}
+        kw: dict = {} if max_tokens is None else {"max_completion_tokens": max_tokens}
         if temperature is not None:
             kw["temperature"] = temperature
         # 有的中转站（如 Codex 中转）不认 response_format，一带就 502；默认不带，靠提示词要求只输出 JSON

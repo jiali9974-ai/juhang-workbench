@@ -1,6 +1,6 @@
 """剪辑脚本：存取、句子里面剪口误（keep）。
 
-出脚本的智能体在 jh/script_agent.py：按 skills/edit_script.md，一组素材调用一次大模型，
+出脚本的智能体在 jh/script_agent.py：按 skills/edit_script.md，整批素材统一调用大模型规划，
 三个阶段（分析句子 → 逐句质检 → 组合并整体检查，不合格就重选）在这一次调用里做完。
 
 剪辑脚本（edit script）结构，工作台里可以直接改：
