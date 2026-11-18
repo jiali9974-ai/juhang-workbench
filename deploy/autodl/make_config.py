@@ -2,6 +2,7 @@
 import sys
 import subprocess
 import hashlib
+import json
 from pathlib import Path
 
 import yaml
@@ -40,6 +41,16 @@ def make(source: Path, base: Path, output: Path) -> None:
     cfg = select(cfg)
     # This server edits source footage and keeps its original speech.
     cfg["script"]["dub_mandarin"] = False
+    if cfg["render"].get("cover", {}).get("enabled", True):
+        # Import the actual local model code, including its optional packages.
+        # A weight file on disk alone does not establish that matting can load.
+        from transformers.dynamic_module_utils import get_class_from_dynamic_module
+
+        directory = base / "data" / cfg["render"]["cover"].get("matting_model", "models/BiRefNet-portrait")
+        model_config = json.loads((directory / "config.json").read_text(encoding="utf-8"))
+        get_class_from_dynamic_module(model_config["auto_map"]["AutoModelForImageSegmentation"],
+                                      str(directory), local_files_only=True)
+        print("BiRefNet model code and dependencies: OK")
     output.write_text(yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False), encoding="utf-8")
     print("Server video encoder:", cfg["render"]["encoder"])
 

@@ -11,6 +11,7 @@
 - `source.git/` 和 `releases/<提交>/` 保存 Git 源码；`current` 指向当前运行版本。
 - Python 环境按 `deploy/autodl/requirements.txt` 内容分别缓存；前端依赖按 lockfile 缓存。
 - 先安装依赖、构建前端、生成 Linux 配置和检查后端导入，再等待剪辑队列空闲后切换。
+- 部署前实际导入 BiRefNet 模型代码并检查其依赖，避免仅检查权重文件而漏掉 `kornia` 等必需包。
 - 新版首页和接口检查失败时，恢复上一版源码、配置和 Python 环境。
 - GPU 用于 SenseVoice 识别和 NVENC 导出；每次部署实际测试 NVENC 编码会话，可用时自动启用，否则使用 libx264。
   NVIDIA 580/595 容器驱动的 GPU 枚举问题由独立 FFmpeg 包装器处理；3080 Ti 已实测通过硬编码。
