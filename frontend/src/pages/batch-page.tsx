@@ -392,10 +392,6 @@ function Stat({ label, value, unit, decimals = 0 }: { label: string; value: numb
 
 function ScriptGrid({ batch, scripts }: { batch: string; scripts: Script[] }) {
   const { watch } = useJobs()
-  const [range, setRange] = useState<[number, number]>([25, 45])
-  useEffect(() => {
-    api.info().then((i) => setRange([i.min_seconds, i.max_seconds])).catch(() => {})
-  }, [])
   if (!scripts.length) {
     return (
       <Empty className="border border-dashed">
@@ -439,7 +435,7 @@ function ScriptGrid({ batch, scripts }: { batch: string; scripts: Script[] }) {
               <StatusBadge status={s.status} className="absolute top-2.5 left-2.5 border-white/30 bg-white/85 backdrop-blur" />
               {s.has_output && <Film className="absolute top-3 right-3 size-4 text-white/80" />}
               <span className="absolute right-14 bottom-3 left-3 line-clamp-2 text-[15px] leading-snug font-bold text-white drop-shadow">{s.title}</span>
-              <span className={cn("absolute right-3 bottom-3 rounded-md bg-black/55 px-1.5 text-xs text-white tabular", ((s.duration ?? 0) > range[1] || (s.duration ?? 0) < range[0]) && "bg-warn/90 font-bold text-black")} title={`建议 ${range[0]}–${range[1]} 秒`}>{s.duration}s</span>
+              <span className="absolute right-3 bottom-3 rounded-md bg-black/55 px-1.5 text-xs text-white tabular">{s.duration}s</span>
             </button>
             <div className="p-3">
               <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">

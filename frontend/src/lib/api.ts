@@ -110,8 +110,8 @@ export interface Info {
   llm: string
   llm_ready: boolean
   gpu_mode: string
-  min_seconds: number
-  max_seconds: number
+  min_seconds: number | null
+  max_seconds: number | null
 }
 
 class ApiError extends Error {

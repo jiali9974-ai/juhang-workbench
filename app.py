@@ -112,8 +112,7 @@ def info():
     return {"tts": cfg["tts"]["engine"], "llm": cfg["llm"]["model"],
             "llm_ready": bool(config.secret(cfg["llm"]["api_key_env"])),
             "gpu_mode": cfg.get("gpu", {}).get("mode", "local"),
-            "min_seconds": cfg.get("script", {}).get("min_seconds", 25),
-            "max_seconds": cfg.get("script", {}).get("max_seconds", 45)}
+            "min_seconds": None, "max_seconds": None}  # 兼容旧客户端；空值表示不限制时长
 
 
 def _clip_durations(batch: str) -> dict:
