@@ -3,10 +3,9 @@
 
 paths:
   material_root: "D:/巨航/素材/素材"      # 素材根目录，下面按拍摄日期分文件夹（9.23、9.25 …）
-  data_root: "D:/巨航/workbench/data"     # 识别结果、剪辑脚本、配音等工作数据
+  data_root: "D:/巨航/workbench/data"     # 识别结果、剪辑脚本等工作数据
   output_root: "D:/巨航/outputs"          # 成片库直接读取这里，项目成片按项目名分文件夹
   ffmpeg: "D:/oopz/ffmpeg.exe"            # Linux 上写 ffmpeg
-  cosyvoice_repo: "D:/jhwb/third_party/CosyVoice"    # 同上，走英文路径的目录链接
 
 asr:
   device: "cuda:0"
@@ -27,7 +26,6 @@ llm:
   # api_key_env 改 JH_DEEPSEEK_API_KEY（secrets.yaml 里还留着旧 Key）
 
 script:
-  dub_mandarin: false                     # 普通话的句子要不要转粤语配音。false = 全部保留素材原声，普通话字幕写普通话（2026-11-17 起）
   min_seconds: 25                         # 每条成片的时长范围（按选中句子的原声时长算）
   max_seconds: 45
   # 语音识别常见错字 → 正确写法。大模型写字幕时会按这张表改，你们可以随时补充
@@ -51,28 +49,6 @@ script:
     - "价钱里的“个”是万：三个左右 = 三万左右，七个几 = 七万几（字幕保留口语“三个左右”即可）"
   # 认不准、又不知道正确写法的词（店名、老板称呼等），原样保留，不要乱改
   keep_as_is: ["bes", "band叔", "pencil"]
-
-tts:
-  engine: "ming"                          # 默认配音引擎：ming | cosyvoice3 | azure（每条脚本也能单独选）
-  ming:                                   # Ming-3.0-tts 0.5B（官方 GGUF）+ audio.cpp 官方引擎，工作台自动启动
-    engine_dir: "D:/jhwb/engines/audiocpp-v0.9.3"
-    model: "D:/jhwb/models/ming/ming-3.0-tts-0.5b-q8_0.gguf"
-    backend: "cuda"
-    idle_unload_minutes: 10               # 闲置多久释放显存
-    dialect: "cantonese"
-    seed: 20251115                        # 固定种子：同一个声音、同一种读法
-    speed: 1.0                            # 0.7–1.5
-    same_voice: true                      # 每句都参考同一段音色样本，整条视频一个声音
-    ref_wav: ""                           # 想用自己录的声音就填这里（5–10 秒干净人声）
-  cosyvoice3:
-    model_dir: "pretrained_models/Fun-CosyVoice3-0.5B"
-    prompt_wav: "asset/zero_shot_prompt.wav"   # 音色参考音频，可换成你们自己录的
-    instruct: "You are a helpful assistant. 请用广东话表达。<|endofprompt|>"
-    speed: 1.0
-  azure:
-    region: "eastasia"
-    voice: "zh-HK-WanLungNeural"
-    api_key_env: "JH_AZURE_TTS_KEY"
 
 render:
   slip_trim: "audio"                      # 口误怎么处理：audio = 只删声音（换成底噪）；cut = 画面一起剪；超过 1 秒无人声时两种模式都会裁画面
@@ -152,14 +128,3 @@ style:
     y_ratio: 0.953
     color: "&H10FFFFFF"
     outline_color: "&H00D03F6A"           # 紫色描边
-
-dub:                                      # 整条视频转粤语（不剪辑，原画面 + 粤语配音 + 粤语字幕）
-  max_chars_per_second: 6.5               # 翻译贴近原句字数（跟嘴型）；但每秒最多这么多字，免得配音要加快太多
-  max_speedup: 1.3                        # 配音比原句长时最多加快多少倍
-  min_speed: 0.85                         # 配音比原句短时最多放慢到多少倍（每句都对齐到原句说话的时长）
-  max_speedup_by_engine:                  # 个别引擎天生说得慢，允许多加快一点（CosyVoice3 比原片慢约 45%）
-    cosyvoice3: 1.6
-  keep_bgm: true                          # 用 Demucs 把原视频的人声分离掉，保留背景音乐和环境声
-  demucs_model: "htdemucs"
-  # 原视频烧进去的普通话字幕位置（画面比例 x, y, 宽, 高），这块会模糊掉，粤语字幕正好压在上面；没有旧字幕就写 []
-  cover_old_subtitles: [0.14, 0.733, 0.72, 0.045]

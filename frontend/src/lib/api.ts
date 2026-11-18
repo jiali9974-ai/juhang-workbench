@@ -3,7 +3,6 @@ import { backgroundTasks } from "./background-tasks.ts"
 
 export type Lang = "yue" | "zh" | string
 export type Role = "hook" | "product" | "cta"
-export type VoiceMode = "auto" | "original" | "tts_all"
 export type ScriptStatus = "draft" | "approved" | "rendered"
 
 export interface Batch {
@@ -32,14 +31,9 @@ export interface Script {
   id: string
   batch: string
   title: string
-  voice_mode: VoiceMode
   status: ScriptStatus
-  tts_engine?: string
-  voice_source?: "original" | "fixed"
-  voice_ref?: VoiceRef
   lines: Line[]
   duration?: number
-  resolved_voice?: "original" | "tts_all"
   has_output?: boolean
 }
 
@@ -89,24 +83,7 @@ export interface Gpu {
   util?: string
 }
 
-export interface VoiceRef {
-  clip: string
-  start: number
-  end: number
-  lang: string
-  text: string
-}
-
-export interface TtsEngine {
-  id: string
-  name: string
-  available: boolean
-  running: boolean
-  note: string
-}
-
 export interface Info {
-  tts: string
   llm: string
   llm_ready: boolean
   gpu_mode: string
@@ -140,19 +117,6 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 const e = encodeURIComponent
-
-/** 整条转好粤语的视频 */
-export interface DubItem {
-  clip: string
-  id: string
-  engine?: string | null
-  min_speed?: number | null
-  duration: number
-  sentences: number
-  max_speed: number
-  updated: number
-  size: number
-}
 
 /** 美颜调色强度：都是 0–1 */
 export interface LookSettings {
@@ -296,16 +260,7 @@ export const api = {
     const [original, beauty] = await Promise.all([keepPreviewImage(result.original), keepPreviewImage(result.beauty)])
     return { ...result, original, beauty, source: "default" as const, fallback: source !== null }
   },
-  ttsPreview: (text: string, engine?: string, ctx?: { batch: string; script_id: string; voice_source?: string; voice_ref?: VoiceRef }) =>
-    request<Job>("/api/tts/preview", { method: "POST", body: JSON.stringify({ text, engine, ...ctx }) }),
-  voiceRef: (b: string, id: string) =>
-    request<{ current: VoiceRef | null; candidates: VoiceRef[] }>(`/api/batches/${e(b)}/scripts/${e(id)}/voice_ref`),
-  ttsEngines: () => request<{ default: string; engines: TtsEngine[] }>("/api/tts/engines"),
   auto: (b: string) => request<Job>(`/api/batches/${e(b)}/auto`, { method: "POST" }),
-  /** 整条转粤语（不剪辑）：clips 不传就处理项目里全部视频 */
-  dubFull: (b: string, clips?: string[], engine?: string) =>
-    request<Job>(`/api/batches/${e(b)}/dub_full`, { method: "POST", body: JSON.stringify({ clips, engine }) }),
-  dubs: (b: string) => request<DubItem[]>(`/api/batches/${e(b)}/dubs`),
   jobs: () => request<Job[]>("/api/jobs"),
 }
 
@@ -317,6 +272,4 @@ export const urls = {
   lookFile: (name: string) => name.startsWith("blob:") ? name : `/api/look/file/${e(name)}`,
   sourceClip: (b: string, l: Line) =>
     `/api/preview_clip?batch=${e(b)}&clip=${e(l.clip)}&start=${l.start}&end=${l.end}`,
-  ttsFile: (path: string) => `/api/tts/file?path=${e(path)}`,
-  voiceRefFile: (b: string, r: VoiceRef) => `/api/voice_ref_file?batch=${e(b)}&clip=${e(r.clip)}&start=${r.start}&end=${r.end}`,
 }

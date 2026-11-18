@@ -6,7 +6,7 @@ import { ease, Stagger, StaggerItem } from "@/components/motion"
 const STEPS = [
   { n: "01", icon: Mic, title: "语音识别", desc: "逐句标出粤语还是普通话，带时间戳" },
   { n: "02", icon: Captions, title: "出剪辑脚本", desc: "开头钩子 → 逐只表讲解 → 结尾引导" },
-  { n: "03", icon: ClipboardCheck, title: "人工审核", desc: "改字幕、删句、调顺序、试听配音" },
+  { n: "03", icon: ClipboardCheck, title: "人工审核", desc: "改字幕、删句、调顺序" },
   { n: "04", icon: Clapperboard, title: "出片", desc: "1440×2560 · 60fps · 字幕角标" },
 ]
 

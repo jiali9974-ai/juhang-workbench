@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useState } from "react"
-import { Check, Clapperboard, Download, FileText, Film, Languages, Loader2, Mic, Play, Plus, RefreshCw, Rocket, Sparkles, Wand2 } from "lucide-react"
+import { Check, Clapperboard, Download, FileText, Film, Loader2, Mic, Play, Plus, RefreshCw, Rocket, Sparkles, Wand2 } from "lucide-react"
 import { AnimatePresence, motion } from "motion/react"
 import { toast } from "sonner"
 
@@ -25,7 +25,7 @@ import { Skeleton } from "@/components/ui/skeleton"
 import { Tabs, TabsList, TabsTrigger } from "@/components/ui/tabs"
 import { useJobs } from "@/hooks/use-jobs"
 import { followTask, getRoute, go, type BatchTab } from "@/hooks/use-route"
-import { api, urls, type Batch, type Clip, type DubItem, type Script, type Transcript, type TtsEngine } from "@/lib/api"
+import { api, urls, type Batch, type Clip, type Script, type Transcript } from "@/lib/api"
 import { minutes, mmss, shortClip, tsec } from "@/lib/format"
 import { cn } from "@/lib/utils"
 
@@ -34,23 +34,19 @@ interface Data {
   stats: Record<string, number>
   scripts: Script[]
   clips: Clip[]
-  dubs: DubItem[]
 }
 
 export function BatchPage({ batch, tab }: { batch: string; tab: BatchTab }) {
   const { watch, version, active } = useJobs()
   const [data, setData] = useState<Data | null>(null)
-  const [dubEngine, setDubEngine] = useState("ming")
-  const [engines, setEngines] = useState<TtsEngine[]>([])
-  useEffect(() => { api.ttsEngines().then((r) => setEngines(r.engines)).catch(() => {}) }, [])
   const [missing, setMissing] = useState(false)
 
   const load = useCallback(async () => {
     const b = (await api.batches()).find((x) => x.batch === batch)
     if (!b) return setMissing(true)   // 项目不存在或刚被删掉
-    const [stats, scripts, clips, dubs] = await Promise.all([api.stats(batch), api.scripts(batch), api.clips(batch), api.dubs(batch).catch(() => [])])
+    const [stats, scripts, clips] = await Promise.all([api.stats(batch), api.scripts(batch), api.clips(batch)])
     setMissing(false)
-    setData({ batch: b, stats, scripts, clips, dubs })
+    setData({ batch: b, stats, scripts, clips })
   }, [batch])
 
   useEffect(() => {
@@ -93,21 +89,6 @@ export function BatchPage({ batch, tab }: { batch: string; tab: BatchTab }) {
     watch(j, (job) => toast.success(`一键出片完成，共 ${(job.result as string[]).length} 条成片`))
     followTask(source, batch, j.id)
   }
-  async function dubFull(clips?: string[], engine = dubEngine) {
-    let j
-    try {
-      j = await api.dubFull(batch, clips, engine)
-    } catch (err) {
-      return toast.error("没法开始", { description: String(err).replace(/^Error: /, "") })
-    }
-    toast("整条转粤语已开始", { description: "识别 → 翻译 → 分离背景音乐 → 克隆原声配音 → 换字幕，1 分钟的视频约 3 分钟" })
-    watch(j, (job) => {
-      toast.success(`粤语版好了，共 ${(job.result as string[]).length} 条`)
-      const visible = getRoute()
-      if (visible.page === "batch" && visible.batch === batch) go({ page: "batch", batch, tab: "dub" })
-      load().catch(() => {})
-    })
-  }
   async function renderAll() {
     const source = getRoute()
     const list = await api.renderAll(batch)
@@ -119,7 +100,7 @@ export function BatchPage({ batch, tab }: { batch: string; tab: BatchTab }) {
   if (missing) return <ProjectMissing kind="batch" name={batch} />
   if (!data) return <BatchSkeleton />
 
-  const { batch: b, stats, scripts, clips, dubs } = data
+  const { batch: b, stats, scripts, clips } = data
   const totalSec = clips.reduce((a, c) => a + c.duration, 0)
   const speech = Object.values(stats).reduce((a, v) => a + v, 0)
   const yue = stats.yue ?? 0
@@ -155,46 +136,13 @@ export function BatchPage({ batch, tab }: { batch: string; tab: BatchTab }) {
           )}
           <AlertDialog>
             <AlertDialogTrigger asChild>
-              <Button variant="outline" size="lg" disabled={running || !b.clips || queue.busy}><Languages />整条转粤语</Button>
-            </AlertDialogTrigger>
-            <AlertDialogContent>
-              <AlertDialogHeader>
-                <AlertDialogTitle>把 {b.clips} 条视频整条转成粤语？</AlertDialogTitle>
-                <AlertDialogDescription>
-                  适合已经剪好的普通话成片：画面不剪不动，只把声音和字幕换成粤语。会自动完成：识别 → 大模型逐句翻成粤语 →
-                  分离出原片的背景音乐 → 用原主播的声音克隆配粤语 → 模糊原来的普通话字幕、压上粤语字幕和左上角黄字。
-                  做好的视频在「粤语版」标签页。
-                </AlertDialogDescription>
-              </AlertDialogHeader>
-              <div className="grid gap-1.5 text-sm">
-                <span className="font-medium">配音引擎</span>
-                <div className="grid grid-cols-3 gap-1.5">
-                  {(engines.length ? engines : [{ id: "ming", name: "Ming-3.0 粤语", available: true, running: false, note: "" }]).map((en) => (
-                    <button key={en.id} disabled={!en.available} onClick={() => setDubEngine(en.id)}
-                      title={en.available ? undefined : en.note}
-                      className={cn("rounded-lg border px-2 py-1.5 text-xs transition disabled:cursor-not-allowed disabled:opacity-45",
-                        dubEngine === en.id ? "border-primary bg-primary/10 font-semibold text-gold-ink" : "hover:border-primary/40")}>
-                      {en.name}
-                      <span className="block text-[10px] font-normal text-muted-foreground">{!en.available ? "需要 Key" : en.id === "azure" ? "固定男声" : "克隆原声"}</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-              <AlertDialogFooter>
-                <AlertDialogCancel>取消</AlertDialogCancel>
-                <AlertDialogAction onClick={() => dubFull()}>开始转粤语</AlertDialogAction>
-              </AlertDialogFooter>
-            </AlertDialogContent>
-          </AlertDialog>
-          <AlertDialog>
-            <AlertDialogTrigger asChild>
               <Button variant="outline" size="lg" disabled={running || !b.clips || queue.busy}><Rocket />一键成片</Button>
             </AlertDialogTrigger>
             <AlertDialogContent>
               <AlertDialogHeader>
                 <AlertDialogTitle>不审核，直接出片？</AlertDialogTitle>
                 <AlertDialogDescription>
-                  会自动完成：识别全部素材 → 大模型出剪辑脚本 → 全部出片。有普通话的视频会自动用粤语配音。
+                  会自动完成：识别全部素材 → 大模型出剪辑脚本 → 全部出片。全部保留素材原声，字幕对应原话。
                   这一批现有的脚本和成片会挪到归档目录。出完的片子仍可以在「剪辑脚本」里逐条修改后重出。
                 </AlertDialogDescription>
               </AlertDialogHeader>
@@ -284,7 +232,6 @@ export function BatchPage({ batch, tab }: { batch: string; tab: BatchTab }) {
         <TabsList variant="line" className="h-10 w-full justify-start gap-2 rounded-none border-b p-0">
           <TabsTrigger value="scripts" className="flex-none px-3">剪辑脚本<span className="ml-1.5 rounded-full bg-muted px-1.5 text-[11px] tabular">{scripts.length}</span></TabsTrigger>
           <TabsTrigger value="clips" className="flex-none px-3">素材库<span className="ml-1.5 rounded-full bg-muted px-1.5 text-[11px] tabular">{clips.length}</span></TabsTrigger>
-          <TabsTrigger value="dub" className="flex-none px-3">粤语版<span className="ml-1.5 rounded-full bg-muted px-1.5 text-[11px] tabular">{dubs.length}</span></TabsTrigger>
         </TabsList>
       </Tabs>
       <AnimatePresence mode="wait" initial={false}>
@@ -296,9 +243,7 @@ export function BatchPage({ batch, tab }: { batch: string; tab: BatchTab }) {
           exit={{ opacity: 0, y: -4 }}
           transition={{ duration: 0.22, ease }}
         >
-          {tab === "scripts" ? <ScriptGrid batch={batch} scripts={scripts} /> : tab === "dub" ? (
-            <DubList batch={batch} dubs={dubs} running={running} onRedo={(clip, engine) => dubFull([clip], engine)} />
-          ) : (
+          {tab === "scripts" ? <ScriptGrid batch={batch} scripts={scripts} /> : (
             <>
               {b.clips > 0 && <div className="mb-5"><ClipSources batch={batch} queue={queue} onChanged={refresh} /></div>}
               <ClipLibrary batch={batch} clips={clips} />
@@ -307,57 +252,6 @@ export function BatchPage({ batch, tab }: { batch: string; tab: BatchTab }) {
         </motion.div>
       </AnimatePresence>
     </div>
-  )
-}
-
-/** 整条转粤语的成片：点封面播放，可以下载、单条重做 */
-const DUB_ENGINE: Record<string, string> = { ming: "Ming", cosyvoice3: "CosyVoice3", azure: "Azure" }
-
-function DubList({ batch, dubs, running, onRedo }: { batch: string; dubs: DubItem[]; running: boolean; onRedo: (clip: string, engine?: string) => void }) {
-  const [playing, setPlaying] = useState<string | null>(null)
-  if (!dubs.length) {
-    return (
-      <Empty className="border border-dashed">
-        <EmptyHeader>
-          <EmptyMedia variant="icon"><Languages /></EmptyMedia>
-          <EmptyTitle>还没有粤语版</EmptyTitle>
-          <EmptyDescription>素材是已经剪好的普通话成片时，点右上角「整条转粤语」：画面不动，声音和字幕换成粤语。</EmptyDescription>
-        </EmptyHeader>
-      </Empty>
-    )
-  }
-  return (
-    <Stagger className="grid grid-cols-[repeat(auto-fill,minmax(220px,1fr))] gap-4">
-      {dubs.map((d) => (
-        <StaggerItem key={d.id} className="soft-shadow overflow-hidden rounded-xl border bg-card">
-          <div className="relative aspect-[9/16] bg-black">
-            {playing === d.id ? (
-              <video src={urls.output(batch, d.id)} autoPlay controls playsInline className="size-full object-contain" />
-            ) : (
-              <button className="group relative size-full" onClick={() => setPlaying(d.id)}>
-                <img src={`${urls.outputThumb(batch, d.id)}?v=${Math.round(d.updated)}`} className="size-full object-cover" />
-                <span className="absolute inset-0 grid place-items-center bg-black/15 transition group-hover:bg-black/30">
-                  <span className="grid size-12 place-items-center rounded-full bg-white/90 text-black shadow-lg transition group-hover:scale-110"><Play className="ml-0.5 size-5" /></span>
-                </span>
-              </button>
-            )}
-          </div>
-          <div className="space-y-2 p-3">
-            <div className="flex items-center gap-1.5">
-              <span className={cn("shrink-0 rounded px-1.5 py-0.5 text-[11px] font-semibold", d.engine ? "bg-primary/15 text-gold-ink" : "bg-muted text-muted-foreground")}>
-                {d.engine ? DUB_ENGINE[d.engine] ?? d.engine : "Ming · 旧版对齐"}
-              </span>
-              <span className="truncate text-sm font-semibold" title={d.clip}>{shortClip(d.clip)}</span>
-            </div>
-            <div className="text-xs text-muted-foreground tabular">{mmss(d.duration)} · {d.sentences} 句 · {(d.size / 2 ** 20).toFixed(0)} MB{d.max_speed > 1.01 ? ` · 最快 ${d.max_speed}×` : ""}{d.min_speed && d.min_speed < 0.99 ? ` · 最慢 ${d.min_speed}×` : ""}</div>
-            <div className="flex gap-2">
-              <Button size="sm" asChild className="font-semibold"><a href={urls.output(batch, d.id)} download={`${d.id}.mp4`}><Download />下载</a></Button>
-              <Button size="sm" variant="outline" disabled={running} onClick={() => onRedo(d.clip, d.engine ?? "ming")}><RefreshCw />重新转</Button>
-            </div>
-          </div>
-        </StaggerItem>
-      ))}
-    </Stagger>
   )
 }
 
@@ -444,7 +338,7 @@ function ScriptGrid({ batch, scripts }: { batch: string; scripts: Script[] }) {
             <div className="p-3">
               <div className="flex flex-wrap items-center gap-1.5 text-xs text-muted-foreground">
                 <span>{s.lines.length} 句</span>·
-                <span>{s.resolved_voice === "tts_all" ? "粤语配音" : "保留原声"}{s.voice_mode === "auto" ? "（自动）" : ""}</span>
+                <span>保留原声</span>
                 {zh > 0 && <LangTag lang="zh" className="ml-auto" />}
               </div>
               <div className="mt-2.5 flex gap-2">

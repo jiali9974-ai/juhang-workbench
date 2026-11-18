@@ -37,10 +37,8 @@ def make(source: Path, base: Path, output: Path) -> None:
     digest = hashlib.sha256((source / "deploy/autodl/nvenc-compat/nvenc_fix.c").read_bytes()).hexdigest()[:20]
     ffmpeg = str(base / "engines/nvenc-compat" / digest / "ffmpeg")
     cfg["paths"].update(material_root=str(base / "materials"), data_root=str(base / "data"),
-                        output_root=str(base / "outputs"), ffmpeg=ffmpeg, cosyvoice_repo="")
+                        output_root=str(base / "outputs"), ffmpeg=ffmpeg)
     cfg = select(cfg)
-    # This server edits source footage and keeps its original speech.
-    cfg["script"]["dub_mandarin"] = False
     if cfg["render"].get("cover", {}).get("enabled", True):
         # Import the actual local model code, including its optional packages.
         # A weight file on disk alone does not establish that matting can load.

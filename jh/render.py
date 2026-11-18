@@ -1,6 +1,6 @@
 """按已确认的剪辑脚本出片。
 
-流程：逐段裁切（竖屏 1440×2560、特写放大、换配音）→ 拼接 → 烧字幕和角标、混背景音乐 → 导出 MP4。
+流程：逐段裁切（竖屏 1440×2560、特写放大）→ 拼接 → 烧字幕和角标、混背景音乐 → 导出 MP4。
 """
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from . import config, look, media, script as scriptmod, tts
+from . import config, look, media, script as scriptmod
 
 PUNCT_STRIP = "，。,.！!？?、；;：: "
 
@@ -23,7 +23,7 @@ class Segment:
     clip: Path
     v_start: float
     v_dur: float
-    tts_wav: Path | None = None           # None 表示用原声
+    audio_wav: Path | None = None           # 清理口误后的原声音轨；None 表示直接使用素材音轨
     subs: list[tuple[float, float, str]] = field(default_factory=list)  # 相对本段开头的时间
     zoom: float | None = None
     punch: bool = False                   # 同一机位跳剪：这一段稍微放大一点，跳剪看起来是有意的
@@ -258,11 +258,10 @@ def has_face(clip: Path, t: float) -> bool:
 def plan(script: dict, progress=None) -> list[Segment]:
     cfg = config.load()
     max_chars = cfg["style"]["subtitle"]["max_chars_per_line"]
-    mode = scriptmod.resolved_voice_mode(script)
     material = config.material_root() / script["batch"]
     segs: list[Segment] = []
 
-    if mode == "original" and cfg["render"].get("slip_trim", "audio") == "audio":
+    if cfg["render"].get("slip_trim", "audio") == "audio":
         # 口误处保留连续画面，删掉的声音换成素材自己的环境底噪；
         # 超过阈值的无人声停顿在分段规划完成后统一同步裁掉音画。
         if scriptmod.fill_keep(script) and script.get("id"):
@@ -294,13 +293,13 @@ def plan(script: dict, progress=None) -> list[Segment]:
                 tail = float(gap.get("final_tail", 0.5) if gi == len(groups) - 1 else gap.get("tail", 0.05))
                 v0, v1 = tighten(material / g[0]["clip"], keep_iv[0][0], keep_iv[-1][1], lead, tail)
             seg = Segment(clip=material / g[0]["clip"], v_start=v0, v_dur=v1 - v0, zoom=g[0].get("zoom"))
-            seg.tts_wav = clean_audio(script["batch"], seg.clip, v0, v1 - v0, keep_iv)
+            seg.audio_wav = clean_audio(script["batch"], seg.clip, v0, v1 - v0, keep_iv)
             for l in g:
                 a, b = max(0.0, l["start"] - v0), min(v1 - v0, l["end"] - v0)
                 if b - a > 0.2:
                     seg.subs += timed_chunks(l["subtitle"], a, b, max_chars)
             segs.append(seg)
-    elif mode == "original":
+    else:
         # 画面也一起剪（跳剪）：每句只用真正要的时间段
         if scriptmod.fill_keep(script) and script.get("id"):
             scriptmod.save(script)
@@ -344,22 +343,6 @@ def plan(script: dict, progress=None) -> list[Segment]:
                 seg.punch = not prev.punch
             segs.append(seg)
             prev = seg
-    else:
-        from . import voice
-
-        ref_wav = voice.reference_for(script)     # 老板原声参考（脚本里选了“固定音色”时为 None）
-        if ref_wav and script.get("id"):
-            scriptmod.save(script)                 # 记下选中的原声片段，下次出片同一个声音
-        for i, l in enumerate(script["lines"]):
-            if progress:
-                progress(i, len(script["lines"]), f"配音 {i + 1}/{len(script['lines'])}")
-            wav = tts.synthesize(l["subtitle"], script.get("tts_engine"), ref_wav, (script.get("voice_ref") or {}).get("lang"))
-            d = tts.wav_duration(wav)
-            seg = Segment(clip=material / l["clip"], v_start=max(0.0, l["start"] - 0.05), v_dur=d + 0.18,
-                          tts_wav=wav, zoom=l.get("zoom"))
-            seg.subs = timed_chunks(l["subtitle"], 0.02, d, max_chars)
-            segs.append(seg)
-
     segs = apply_speech_timing(segs, progress)
     rcfg = cfg["render"]
     for s in segs:
@@ -372,7 +355,7 @@ def plan(script: dict, progress=None) -> list[Segment]:
 
 
 def apply_speech_timing(segs: list[Segment], progress=None) -> list[Segment]:
-    """处理最终人声音轨后，再同步裁画面、音轨和字幕；原声清理与配音都经过这里。"""
+    """处理最终人声音轨后，再同步裁画面、音轨和字幕；原声清理后经过这里。"""
     from . import speech_timing
 
     cfg = config.load()["render"]
@@ -383,7 +366,7 @@ def apply_speech_timing(segs: list[Segment], progress=None) -> list[Segment]:
     for index, seg in enumerate(segs):
         if progress:
             progress(index, len(segs), f"裁剪无人声停顿 {index + 1}/{len(segs)}")
-        source, start = (seg.tts_wav, seg.a_start) if seg.tts_wav else (seg.clip, seg.v_start)
+        source, start = (seg.audio_wav, seg.a_start) if seg.audio_wav else (seg.clip, seg.v_start)
         audio = _clip_audio(source, start, seg.v_dur)
         voices = speech_timing.detect(audio, AUDIO_SR)
         ranges = speech_timing.retained_ranges(voices, seg.v_dur, threshold=threshold, lead=lead, tail=tail,
@@ -615,7 +598,7 @@ def encode_segment(seg: Segment, out: Path, settings: dict | None = None) -> Non
     filters.extend([f"fps={fps}", "setsar=1", "format=yuv420p", "tpad=stop_mode=clone:stop_duration=3"])
     vf = ",".join(filters)
     source = ["-ss", f"{seg.v_start:.3f}", "-t", f"{seg.v_dur + 0.5:.3f}", "-i", str(seg.clip)]
-    voice = ["-ss", f"{seg.a_start:.3f}", "-i", str(seg.tts_wav)] if seg.tts_wav else []
+    voice = ["-ss", f"{seg.a_start:.3f}", "-i", str(seg.audio_wav)] if seg.audio_wav else []
     f = 0.012                              # 切点两边各淡 12 毫秒，剪掉口误后接上不会“咔”一声
     fades = f"afade=t=in:d={f},afade=t=out:st={max(0.0, seg.v_dur - f):.3f}:d={f}"
     audio_trim = f"atrim=duration={seg.a_dur:.3f}," if seg.a_dur is not None else ""
@@ -692,7 +675,7 @@ def render(script: dict, progress=None, on_stage=None) -> Path:
     work.mkdir(parents=True)
 
     if on_stage:
-        on_stage("look" if scriptmod.resolved_voice_mode(script) == "original" else "tts")
+        on_stage("look")
     segs = plan(script, progress)
     out_dir = config.output_root() / script["batch"]
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -723,7 +706,7 @@ def render(script: dict, progress=None, on_stage=None) -> Path:
         embed_cover(out, cover_jpg)          # 文件自带封面：电脑文件夹、播放器、微信里看到的都是做好的封面
 
     meta = {"script": script["id"], "duration": round(total, 2), "segments": len(segs),
-            "voice_mode": scriptmod.resolved_voice_mode(script), "output": str(out)}
+            "output": str(out)}
     (work / "render.json").write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
     return out
 

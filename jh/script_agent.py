@@ -23,11 +23,11 @@ GROUP_SECONDS = 1200         # 素材按人声时长分组交给大模型，每�
 def system_prompt() -> str:
     raw = dict(re.findall(r"<!--\s*prompt:(\w+)\s*-->\s*(.*?)\s*<!--\s*/prompt\s*-->",
                           SKILL.read_text(encoding="utf-8"), re.S))
-    missing = [k for k in ("system", "subtitle_original", "subtitle_dub") if k not in raw]
+    missing = [k for k in ("system", "subtitle_original") if k not in raw]
     if missing:
         raise RuntimeError(f"{SKILL.name} 里缺少提示词：{'、'.join(missing)}")
     sc = config.load().get("script", {})
-    text = raw["system"].replace("{subtitle_rules}", raw["subtitle_dub" if scriptmod.dub_mandarin() else "subtitle_original"])
+    text = raw["system"].replace("{subtitle_rules}", raw["subtitle_original"])
     vals = {"min_s": str(sc.get("min_seconds", 25)), "max_s": str(sc.get("max_seconds", 45)),
             "glossary": "\n".join(f"  - {g}" for g in sc.get("glossary", [])) or "  （无）",
             "keep_as_is": "、".join(sc.get("keep_as_is", [])) or "（无）"}
@@ -210,7 +210,6 @@ def generate(batch: str, transcripts: list[dict], progress=None) -> list[dict]:
         scripts.append({
             "id": "", "batch": batch, "title": v.get("title") or batch,
             "cover": [str(x).strip() for x in (v.get("cover") or []) if str(x).strip()][:2],
-            "voice_mode": "auto" if scriptmod.dub_mandarin() else "original",
             "status": "draft", "lines": lines,
         })
     for i, s in enumerate(scripts, 1):

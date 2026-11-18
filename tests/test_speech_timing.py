@@ -50,12 +50,12 @@ class SpeechTimingTests(unittest.TestCase):
         self.assertAlmostEqual(result[1].v_start + result[1].v_dur, 22.0)
 
     def test_split_moves_video_audio_and_subtitles_together(self):
-        seg = render.Segment(self.root / "video.mp4", 10, 3, tts_wav=self.root / "voice.wav", a_start=5,
+        seg = render.Segment(self.root / "video.mp4", 10, 3, audio_wav=self.root / "voice.wav", a_start=5,
                              subs=[(.2, .8, "第一句"), (2.01, 2.6, "第二句")], zoom=1.2)
         with patch.object(render, "_clip_audio", return_value=np.ones((144000, 2), np.float32)) as audio, \
              patch.object(speech_timing, "detect", return_value=[(.2, .8), (2.01, 2.6)]):
             first, last = render.apply_speech_timing([seg])
-        audio.assert_called_once_with(seg.tts_wav, 5, 3)
+        audio.assert_called_once_with(seg.audio_wav, 5, 3)
         self.assertEqual((first.v_start, first.a_start, first.v_dur), (10.18, 5.18, .67))
         self.assertEqual((last.v_start, last.a_start, last.v_dur), (11.96, 6.96, 1.14))
         self.assertEqual(first.subs, [(.02, .62, "第一句")])
@@ -133,7 +133,7 @@ class SpeechTimingTests(unittest.TestCase):
         sf.write(wav, waveform, sr)
         media.run_ffmpeg(["-f", "lavfi", "-i", "color=c=blue:s=90x160:r=60:d=3",
                           "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", str(video)])
-        seg = render.Segment(video, 0, 3, tts_wav=wav, zoom=1)
+        seg = render.Segment(video, 0, 3, audio_wav=wav, zoom=1)
         with patch.object(speech_timing, "detect", return_value=[(.2, .8), (2.01, 2.6)]):
             parts = render.apply_speech_timing([seg])
         out = self.root / "last.mp4"

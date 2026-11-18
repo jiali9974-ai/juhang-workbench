@@ -41,7 +41,7 @@ def main() -> None:
     cfg = yaml.safe_load((APP / "config.yaml").read_text(encoding="utf-8"))
     cfg = _fix(cfg)
     cfg["paths"].update(material_root=str(BASE / "materials"), data_root=str(BASE / "data"), output_root=str(BASE / "data" / "outputs"),
-                        ffmpeg="/usr/bin/ffmpeg", cosyvoice_repo="")
+                        ffmpeg="/usr/bin/ffmpeg")
     cfg["asr"]["device"] = "cpu"
     cfg["render"]["encoder"] = "libx264"
     cfg.setdefault("gpu", {})["mode"] = "cpu"

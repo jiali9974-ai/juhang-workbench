@@ -5,10 +5,6 @@ from huggingface_hub import snapshot_download
 REPOS = [
     ("FunAudioLLM/SenseVoiceSmall", "models/SenseVoiceSmall", ["*.pt", "*.yaml", "*.json", "*.mvn", "*.model", "*.py"]),
     ("funasr/fsmn-vad", "models/fsmn-vad", None),
-    # 跳过 llm.rl.pt / flow.decoder.estimator.fp32.onnx / speech_tokenizer_v3.batch.onnx（运行用不到，共 4.3GB）
-    ("FunAudioLLM/Fun-CosyVoice3-0.5B-2512", "third_party/CosyVoice/pretrained_models/Fun-CosyVoice3-0.5B",
-     ["cosyvoice3.yaml", "llm.pt", "flow.pt", "hift.pt", "campplus.onnx", "speech_tokenizer_v3.onnx",
-      "spk2info.pt", "configuration.json", "README.md", "CosyVoice-BlankEN/*", "asset/*"]),
 ]
 for repo, d, patterns in REPOS:
     for attempt in range(10):

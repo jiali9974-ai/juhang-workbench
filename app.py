@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
 
-from jh import asr, config, deletion, media, outputs, render, script as scriptmod, tts, uploads
+from jh import asr, config, deletion, media, outputs, render, script as scriptmod, uploads
 from jh.jobs import JobQueue
 
 app = FastAPI(title="巨航剪辑工作台")
@@ -109,7 +109,7 @@ def batches():
 @app.get("/api/info")
 def info():
     cfg = config.load()
-    return {"tts": cfg["tts"]["engine"], "llm": cfg["llm"]["model"],
+    return {"llm": cfg["llm"]["model"],
             "llm_ready": bool(config.secret(cfg["llm"]["api_key_env"])),
             "gpu_mode": cfg.get("gpu", {}).get("mode", "local"),
             "min_seconds": cfg.get("script", {}).get("min_seconds", 25),
@@ -329,7 +329,7 @@ def scripts(batch: str):
     for s in scriptmod.list_scripts(batch):
         out = config.output_root() / batch / f"{s['id']}.mp4"
         res.append({**s, "duration": round(scriptmod.total_duration(s), 1),
-                    "resolved_voice": scriptmod.resolved_voice_mode(s), "has_output": out.exists()})
+                    "has_output": out.exists()})
     return res
 
 
@@ -543,78 +543,6 @@ def output(batch: str, sid: str):
     return FileResponse(f, media_type="video/mp4", filename=f"{sid}.mp4")
 
 
-# ---------------- 配音试听 ----------------
-
-@app.post("/api/tts/preview")
-def tts_preview(data: dict = Body(...)):
-    text = (data.get("text") or "").strip()
-    if not text:
-        raise HTTPException(400, "没有文字")
-    engine = data.get("engine") or None
-    ref = None
-    if data.get("batch") and data.get("script_id"):
-        # 试听也用这条视频的老板原声做参考，和出片一致
-        from jh import voice
-
-        s = scriptmod.load(data["batch"], data["script_id"])
-        s.update({k: data[k] for k in ("voice_source", "voice_ref") if k in data})
-        ref = voice.reference_for(s)
-    ref_lang = (s.get("voice_ref") or {}).get("lang") if ref else None
-    job = jobs.submit("tts", f"试听：{text[:12]}", lambda p: str(tts.synthesize(text, engine, ref, ref_lang)))
-    return job.to_dict()
-
-
-@app.get("/api/batches/{batch}/scripts/{sid}/voice_ref")
-def get_voice_ref(batch: str, sid: str):
-    """这条视频用来克隆老板声音的原声片段，以及可以换的其他候选。"""
-    from jh import voice
-
-    s = scriptmod.load(batch, sid)
-    cands = voice.ranked(s)
-    current = s.get("voice_ref") or (cands[0] if cands else None)
-    return {"current": current, "candidates": cands}
-
-
-@app.get("/api/voice_ref_file")
-def voice_ref_file(batch: str, clip: str, start: float, end: float):
-    from jh import voice
-
-    if "/" in clip or "\\" in clip or not (_batch_dir(batch) / clip).exists():
-        raise HTTPException(404)
-    f = voice.extract(batch, {"clip": clip, "start": start, "end": end})
-    return FileResponse(f, media_type="audio/wav")
-
-
-@app.get("/api/tts/engines")
-def tts_engines():
-    """配音引擎列表和状态（页面上选择引擎用）。"""
-    from jh import ming_engine
-
-    cfg = config.load()["tts"]
-    cv_dir = Path(config.load()["paths"]["cosyvoice_repo"]) / cfg["cosyvoice3"]["model_dir"]
-    cv_ok = (cv_dir / "llm.pt").exists() and (cv_dir / "flow.pt").exists()
-    ming = ming_engine.status()
-    return {
-        "default": cfg["engine"],
-        "engines": [
-            {"id": "ming", "name": "Ming-3.0 粤语", "available": ming["available"], "running": ming["running"],
-             "note": "工作台自动启动，约占 2–3GB 显存" if ming["available"] else ming["message"]},
-            {"id": "cosyvoice3", "name": "CosyVoice3", "available": cv_ok and not cfg["cosyvoice3"].get("broken"), "running": False,
-             "note": cfg["cosyvoice3"].get("broken") or ("本地模型" if cv_ok else "模型还在下载")},
-            {"id": "azure", "name": "Azure 粤语", "available": bool(config.secret(cfg["azure"]["api_key_env"])),
-             "running": False, "note": "需要在 secrets.yaml 填 Key"},
-        ],
-    }
-
-
-@app.get("/api/tts/file")
-def tts_file(path: str):
-    f = Path(path).resolve()
-    if config.data_root().resolve() not in f.parents or not f.exists():
-        raise HTTPException(404)
-    return FileResponse(f, media_type="audio/wav")
-
-
 # ---------------- 任务 ----------------
 
 @app.get("/api/jobs")
@@ -628,44 +556,6 @@ def job(jid: str):
     if not j:
         raise HTTPException(404)
     return j.to_dict()
-
-
-# ---------------- 整条转粤语（不剪辑） ----------------
-
-@app.post("/api/batches/{batch}/dub_full")
-def dub_full(batch: str, data: dict = Body(default={})):
-    """已经剪好的普通话成片：画面不动，整条换成粤语配音和粤语字幕。clips 不传就处理这个项目里的全部视频。"""
-    from jh import dub
-
-    _batch_dir(batch)
-    clips = data.get("clips") or None
-    engine = data.get("engine") or config.load()["tts"]["engine"]
-    if engine not in dub.ENGINE_NAMES:
-        raise HTTPException(400, f"未知的配音引擎：{engine}")
-    if engine == "azure" and not config.secret(config.load()["tts"]["azure"]["api_key_env"]):
-        raise HTTPException(400, "Azure 还没有 Key：在 secrets.yaml 里填 JH_AZURE_TTS_KEY")
-    return jobs.submit("dub", f"{batch} 整条转粤语（{dub.ENGINE_NAMES[engine]}）",
-                       lambda pr: dub.dub_batch(batch, clips, pr, engine)).to_dict()
-
-
-@app.get("/api/batches/{batch}/dubs")
-def list_dubs(batch: str):
-    """这个项目里已经整条转好粤语的视频（新的在前）。"""
-    root = config.data_root() / "dub" / batch
-    out = []
-    for f in root.glob("*/dub*.json") if root.exists() else []:
-        try:
-            m = json.loads(f.read_text(encoding="utf-8"))
-        except json.JSONDecodeError:
-            continue
-        o = Path(m.get("output", ""))
-        if not o.exists():
-            continue
-        st = o.stat()
-        out.append({"clip": m["clip"], "id": o.stem, "engine": m.get("engine"), "duration": m.get("duration"),
-                    "sentences": m.get("sentences"), "max_speed": m.get("max_speed"), "min_speed": m.get("min_speed"),
-                    "updated": st.st_mtime, "size": st.st_size})
-    return sorted(out, key=lambda x: -x["updated"])
 
 
 # ---------------- 直接删除项目 ----------------
@@ -688,7 +578,7 @@ def delete_batch(batch: str):
         raise HTTPException(409, "这个项目还有任务在跑，等跑完再删")
     root = config.data_root()
     targets = [(config.material_root(), batch), (config.output_root(), batch)]
-    targets.extend((root / sub, batch) for sub in ("transcripts", "scripts", "renders", "preview", "thumbs", "voice_refs", "dub", "upload_receipts"))
+    targets.extend((root / sub, batch) for sub in ("transcripts", "scripts", "renders", "preview", "thumbs", "upload_receipts"))
     targets.append((root / "clipinfo", f"{batch}.json"))
     try:
         deletion.delete_children(targets)
@@ -700,7 +590,7 @@ def delete_batch(batch: str):
 # ---------------- 流程图：每一步用的模型，网页上直接改 ----------------
 
 # 这几项要重新加载模型，有任务在跑时不让改
-_NEEDS_IDLE = {"asr.sensevoice_dir", "asr.device", "tts.ming.model"}
+_NEEDS_IDLE = {"asr.sensevoice_dir", "asr.device"}
 
 
 @app.get("/api/pipeline")
@@ -716,7 +606,7 @@ def pipeline_put(data: dict = Body(...)):
 
     changes = (data or {}).get("changes") or {}
     if _NEEDS_IDLE & set(changes) and jobs.busy():
-        raise HTTPException(409, "有任务在跑，识别模型和 Ming 模型要等任务跑完再换（其他模型现在就能改）")
+        raise HTTPException(409, "有任务在跑，识别模型要等任务跑完再换（其他模型现在就能改）")
     try:
         saved = pipeline.update(changes)
     except ValueError as e:

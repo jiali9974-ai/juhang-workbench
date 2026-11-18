@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react"
-import { ArrowDown, ArrowLeft, ArrowUp, AudioLines, Download, Film, GripVertical, Keyboard, Loader2, Mic, Play, Save, Shuffle, Trash2, Video, Wand2, X } from "lucide-react"
+import { useCallback, useEffect, useState } from "react"
+import { ArrowDown, ArrowLeft, ArrowUp, Download, Film, GripVertical, Keyboard, Loader2, Save, Trash2, Video, Wand2, X } from "lucide-react"
 import { AnimatePresence, motion, Reorder, useDragControls } from "motion/react"
 import { toast } from "sonner"
 
@@ -20,13 +20,11 @@ import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { Skeleton } from "@/components/ui/skeleton"
 import { Textarea } from "@/components/ui/textarea"
-import { ToggleGroup, ToggleGroupItem } from "@/components/ui/toggle-group"
 import { Tooltip, TooltipContent, TooltipTrigger } from "@/components/ui/tooltip"
 import { useJobs } from "@/hooks/use-jobs"
 import { followTask, getRoute, go } from "@/hooks/use-route"
-import { useSessionState } from "@/hooks/use-session-state"
-import { api, urls, type Line, type Role, type Script, type TtsEngine, type VoiceMode, type VoiceRef } from "@/lib/api"
-import { lineDuration, resolvedVoice, ROLE, scriptDuration, shortClip, subtitleChars, subtitleTooLong, tsec, VOICE } from "@/lib/format"
+import { api, urls, type Line, type Role, type Script } from "@/lib/api"
+import { lineDuration, ROLE, scriptDuration, shortClip, subtitleChars, subtitleTooLong, tsec } from "@/lib/format"
 import { cn } from "@/lib/utils"
 
 type Preview = { kind: "none" } | { kind: "output" } | { kind: "source"; key: string }
@@ -55,28 +53,9 @@ export function ScriptEditor({ batch, id }: { batch: string; id: string }) {
   const [current, setCurrent] = useState<string | null>(null)
   const [preview, setPreview] = useState<Preview>({ kind: "none" })
   const [outVer, setOutVer] = useState(() => Date.now())
-  const [ttsLoading, setTtsLoading] = useSessionState<string | null>(`script.tts:${batch}:${id}`, null)
-  const [engines, setEngines] = useState<{ default: string; engines: TtsEngine[] } | null>(null)
-  useEffect(() => {
-    api.ttsEngines().then(setEngines).catch(() => {})
-  }, [])
-  const [refCands, setRefCands] = useState<VoiceRef[]>([])
-  useEffect(() => {
-    api.voiceRef(batch, id).then((r) => {
-      setRefCands(r.candidates)
-      // 还没选过原声片段时，先用排第一的那段
-      setScript((s) => (s && !s.voice_ref && r.current ? { ...s, voice_ref: r.current } : s))
-    }).catch(() => {})
-  }, [batch, id])
-  const audio = useRef<HTMLAudioElement>(null)
-
   const load = useCallback(async () => {
     const list = await api.scripts(batch)
-    let s = list.find((x) => x.id === id) ?? null
-    // 老板原声参考：还没选过就先用排第一的那段（脚本加载完再取，避免先后顺序丢数据）
-    const refs = s ? await api.voiceRef(batch, id).catch(() => null) : null
-    setRefCands(refs?.candidates ?? [])
-    if (s && !s.voice_ref && refs?.current) s = { ...s, voice_ref: refs.current }
+    const s = list.find((x) => x.id === id) ?? null
     setScript(s)
     setKeys(s ? s.lines.map(() => newKey()) : [])
     setDirty(false)
@@ -112,7 +91,6 @@ export function ScriptEditor({ batch, id }: { batch: string; id: string }) {
       if (!script) return
       const clean: Script = { ...script, status: status ?? script.status }
       delete clean.duration
-      delete clean.resolved_voice
       delete clean.has_output
       await api.saveScript(clean)
       setScript((s) => (s ? { ...s, status: clean.status } : s))
@@ -191,7 +169,6 @@ export function ScriptEditor({ batch, id }: { batch: string; id: string }) {
   }
 
   const s = script
-  const voice = resolvedVoice(s)
   const rendering = active.some((j) => j.title.startsWith(s.id))
   const lineOf = (k: string) => s.lines[keys.indexOf(k)]
 
@@ -202,23 +179,6 @@ export function ScriptEditor({ batch, id }: { batch: string; id: string }) {
     toast("已确认，加入出片队列")
     watch(j, () => toast.success(`${s.id} 出片完成`))
     followTask(source, batch, j.id)
-  }
-
-  async function playTts(k: string) {
-    setTtsLoading(k)
-    try {
-      const j = await api.ttsPreview(lineOf(k).subtitle, s.tts_engine || engines?.default, { batch, script_id: s.id, voice_source: s.voice_source ?? "original", voice_ref: s.voice_ref })
-      watch(j, (job) => {
-        setTtsLoading(null)
-        if (audio.current) {
-          audio.current.src = urls.ttsFile(job.result as string)
-          audio.current.play()
-        }
-      })
-    } catch (e) {
-      setTtsLoading(null)
-      toast.error("配音失败", { description: String(e) })
-    }
   }
 
   function remove(k: string) {
@@ -259,7 +219,7 @@ export function ScriptEditor({ batch, id }: { batch: string; id: string }) {
         <ArrowLeft className="size-4 transition-transform group-hover:-translate-x-0.5" />返回 {batch}
       </button>
 
-      {/* 标题 + 配音模式 */}
+      {/* 标题 */}
       <div className="flex flex-wrap items-center gap-3">
         <input
           value={s.title}
@@ -269,92 +229,8 @@ export function ScriptEditor({ batch, id }: { batch: string; id: string }) {
         <StatusBadge status={s.status} />
       </div>
       <div className="mt-3 flex flex-wrap items-center gap-3">
-        <span className="text-sm text-muted-foreground">配音</span>
-        <ToggleGroup type="single" variant="outline" size="sm" value={s.voice_mode} onValueChange={(v) => v && update((x) => ({ ...x, voice_mode: v as VoiceMode }))}>
-          {(Object.keys(VOICE) as VoiceMode[]).map((k) => (
-            <ToggleGroupItem key={k} value={k} className="px-3 data-[state=on]:bg-primary/15 data-[state=on]:text-gold-ink">{VOICE[k]}</ToggleGroupItem>
-          ))}
-        </ToggleGroup>
-        <AnimatePresence mode="wait" initial={false}>
-          <motion.span
-            key={voice + s.voice_mode}
-            initial={{ opacity: 0, y: 4 }}
-            animate={{ opacity: 1, y: 0 }}
-            exit={{ opacity: 0, y: -4 }}
-            transition={{ duration: 0.18 }}
-            className="text-xs text-muted-foreground"
-          >
-            {voice === "tts_all" ? `整条用粤语配音${s.voice_mode === "auto" ? "（有普通话句子）" : ""}` : "保留老板原声"}
-          </motion.span>
-        </AnimatePresence>
-        {voice === "tts_all" && engines && (
-          <motion.div initial={{ opacity: 0, x: -6 }} animate={{ opacity: 1, x: 0 }} className="flex items-center gap-2">
-            <span className="text-sm text-muted-foreground">引擎</span>
-            <Select value={s.tts_engine || engines.default} onValueChange={(v) => update((x) => ({ ...x, tts_engine: v }))}>
-              <SelectTrigger size="sm" className="w-[150px]"><SelectValue /></SelectTrigger>
-              <SelectContent>
-                {engines.engines.map((en) => (
-                  <SelectItem key={en.id} value={en.id} disabled={!en.available}>
-                    <span className={cn("size-1.5 rounded-full", en.available ? "bg-ok" : "bg-muted-foreground/40")} />
-                    {en.name}
-                    {!en.available && <span className="text-[11px] text-muted-foreground">（{en.note}）</span>}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
-          </motion.div>
-        )}
         <span className="ml-auto text-sm text-muted-foreground tabular">{s.lines.length} 句 · 原声约 {scriptDuration(s).toFixed(1)} 秒</span>
       </div>
-
-      {/* 配音音色：老板原声克隆 / 固定音色 */}
-      <AnimatePresence initial={false}>
-        {voice === "tts_all" && (
-          <motion.div
-            initial={{ opacity: 0, height: 0 }}
-            animate={{ opacity: 1, height: "auto" }}
-            exit={{ opacity: 0, height: 0 }}
-            transition={{ duration: 0.25, ease }}
-            className="overflow-hidden"
-          >
-            <div className="soft-shadow mt-3 flex flex-wrap items-center gap-3 rounded-xl border bg-card px-3 py-2.5">
-              <span className="flex items-center gap-1.5 text-sm text-muted-foreground"><Mic className="size-4" />音色</span>
-              <ToggleGroup
-                type="single"
-                variant="outline"
-                size="sm"
-                value={s.voice_source ?? "original"}
-                onValueChange={(v) => v && update((x) => ({ ...x, voice_source: v as "original" | "fixed" }))}
-              >
-                <ToggleGroupItem value="original" className="px-3 data-[state=on]:bg-primary/15 data-[state=on]:text-gold-ink">老板原声</ToggleGroupItem>
-                <ToggleGroupItem value="fixed" className="px-3 data-[state=on]:bg-primary/15 data-[state=on]:text-gold-ink">固定音色</ToggleGroupItem>
-              </ToggleGroup>
-              {(s.voice_source ?? "original") === "original" ? (
-                s.voice_ref ? (
-                  <>
-                    <span className="min-w-0 flex-1 truncate text-xs text-muted-foreground" title={s.voice_ref.text}>
-                      参考原声：{shortClip(s.voice_ref.clip)} · {tsec(s.voice_ref.start)}–{tsec(s.voice_ref.end)} ·{" "}
-                      <LangTag lang={s.voice_ref.lang === "zh" ? "zh" : "yue"} className="mx-0.5" /> {s.voice_ref.text}
-                    </span>
-                    <Button size="sm" variant="outline" onClick={() => {
-                      if (audio.current && s.voice_ref) { audio.current.src = urls.voiceRefFile(batch, s.voice_ref); audio.current.play() }
-                    }}><Play />试听原声</Button>
-                    {refCands.length > 1 && (
-                      <Button size="sm" variant="ghost" onClick={() => {
-                        const i = refCands.findIndex((c) => c.clip === s.voice_ref?.clip && c.start === s.voice_ref?.start)
-                        update((x) => ({ ...x, voice_ref: refCands[(i + 1) % refCands.length] }))
-                        toast("已换一段原声做参考", { description: "保存后出片生效，配音缓存会按新声音重新生成" })
-                      }}><Shuffle />换一段</Button>
-                    )}
-                  </>
-                ) : <span className="text-xs text-muted-foreground">没找到合适的原声片段，会用固定音色</span>
-              ) : (
-                <span className="text-xs text-muted-foreground">不克隆老板声音，用固定种子生成的粤语声音</span>
-              )}
-            </div>
-          </motion.div>
-        )}
-      </AnimatePresence>
 
       {/* 时间线：拖动排序时色块跟着动 */}
       <div className="soft-shadow mt-4 flex h-9 overflow-hidden rounded-lg border bg-card">
@@ -405,11 +281,9 @@ export function ScriptEditor({ batch, id }: { batch: string; id: string }) {
                     index={i}
                     line={s.lines[i]}
                     active={current === k}
-                    ttsLoading={ttsLoading === k}
                     onSelect={() => setCurrent(k)}
                     onChange={(patch) => updateLine(i, patch)}
                     onSource={() => showSource(k)}
-                    onTts={() => playTts(k)}
                     onMove={(d) => move(k, d)}
                     onRemove={() => remove(k)}
                   />
@@ -507,7 +381,6 @@ export function ScriptEditor({ batch, id }: { batch: string; id: string }) {
           )}
         </div>
       </div>
-      <audio ref={audio} className="hidden" />
     </div>
   )
 }
@@ -517,16 +390,14 @@ interface RowProps {
   index: number
   line: Line
   active: boolean
-  ttsLoading: boolean
   onSelect: () => void
   onChange: (patch: Partial<Line>) => void
   onSource: () => void
-  onTts: () => void
   onMove: (d: number) => void
   onRemove: () => void
 }
 
-function LineRow({ k, index, line: l, active, ttsLoading, onSelect, onChange, onSource, onTts, onMove, onRemove }: RowProps) {
+function LineRow({ k, index, line: l, active, onSelect, onChange, onSource, onMove, onRemove }: RowProps) {
   const controls = useDragControls()
   const long = subtitleTooLong(l.subtitle)
   return (
@@ -571,7 +442,7 @@ function LineRow({ k, index, line: l, active, ttsLoading, onSelect, onChange, on
           className="min-h-11 resize-y bg-background text-base font-semibold transition-shadow focus-visible:shadow-[0_0_0_4px_oklch(0.7_0.13_78/15%)]"
         />
         <div className="mt-1 flex justify-between text-[11px] text-muted-foreground">
-          <span>粤语字幕 · 也是配音文案</span>
+          <span>字幕 · 对应素材原话</span>
           <motion.span key={long ? "long" : "ok"} initial={{ opacity: 0.4 }} animate={{ opacity: 1 }} className={cn(long && "font-medium text-warn")}>
             {subtitleChars(l.subtitle)} 字{long && " · 单段太长，建议加逗号"}
           </motion.span>
@@ -598,9 +469,6 @@ function LineRow({ k, index, line: l, active, ttsLoading, onSelect, onChange, on
         </div>
         <div className="flex gap-1">
           <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); onSource() }}><Video />原片</Button>
-          <Button size="sm" variant="outline" onClick={(e) => { e.stopPropagation(); onTts() }} disabled={ttsLoading} aria-busy={ttsLoading}>
-            {ttsLoading ? <Loader2 className="animate-spin" /> : <AudioLines />}配音
-          </Button>
           <Button size="icon-sm" variant="ghost" title="上移（Alt+↑）" onClick={(e) => { e.stopPropagation(); onMove(-1) }}><ArrowUp /></Button>
           <Button size="icon-sm" variant="ghost" title="下移（Alt+↓）" onClick={(e) => { e.stopPropagation(); onMove(1) }}><ArrowDown /></Button>
           <Button size="icon-sm" variant="ghost" title="删除这句（可撤销）" className="hover:text-destructive" onClick={(e) => { e.stopPropagation(); onRemove() }}><X /></Button>

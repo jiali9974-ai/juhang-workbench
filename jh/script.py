@@ -1,4 +1,4 @@
-"""剪辑脚本：存取、配音模式、句子里面剪口误（keep）。
+"""剪辑脚本：存取、句子里面剪口误（keep）。
 
 出脚本的智能体在 jh/script_agent.py：按 skills/edit_script.md，一组素材调用一次大模型，
 三个阶段（分析句子 → 逐句质检 → 组合并整体检查，不合格就重选）在这一次调用里做完。
@@ -9,7 +9,6 @@
   "batch": "9.23",
   "title": "两只日志 126333 / 126334",
   "cover": ["封面第一行", "封面第二行"],
-  "voice_mode": "auto",          # auto：有普通话就整条用 TTS；original：保留原声；tts_all：全部 TTS
   "status": "draft",             # draft 草稿 / approved 已确认 / rendered 已出片
   "lines": [
     {"ref": "C1-S3", "clip": "xxx.MOV", "start": 12.3, "end": 15.8, "src_lang": "yue",
@@ -34,11 +33,6 @@ def _extract_json(text: str) -> dict:
         text = m.group(1)
     start, end = text.find("{"), text.rfind("}")
     return json.loads(text[start:end + 1])
-
-
-def dub_mandarin() -> bool:
-    """普通话的句子要不要转成粤语配音。False = 全部保留素材原声，普通话字幕就写普通话。"""
-    return bool(config.load().get("script", {}).get("dub_mandarin", True))
 
 
 def generate(batch: str, transcripts: list[dict], progress=None) -> list[dict]:
@@ -124,7 +118,12 @@ def archive_batch(batch: str) -> Path | None:
     return moved
 
 
+# 兼容旧浏览器保存脚本，丢弃已取消功能的字段。
+_LEGACY_AUDIO_FIELDS = {"voice_mode", "tts_engine", "voice_source", "voice_ref", "resolved_voice"}
+
+
 def save(script: dict) -> Path:
+    script = {k: v for k, v in script.items() if k not in _LEGACY_AUDIO_FIELDS}
     p = scripts_dir(script["batch"]) / f"{script['id']}.json"
     p.write_text(json.dumps(script, ensure_ascii=False, indent=1), encoding="utf-8")
     return p
@@ -136,16 +135,6 @@ def load(batch: str, script_id: str) -> dict:
 
 def list_scripts(batch: str) -> list[dict]:
     return [json.loads(p.read_text(encoding="utf-8")) for p in sorted(scripts_dir(batch).glob("*.json"))]
-
-
-def resolved_voice_mode(script: dict) -> str:
-    """auto 模式下：只要有一句原话是普通话，整条都用 TTS，保证声音一致。"""
-    mode = script.get("voice_mode", "auto")
-    if mode != "auto":
-        return mode
-    if not dub_mandarin():
-        return "original"
-    return "tts_all" if any(l["src_lang"] == "zh" for l in script["lines"]) else "original"
 
 
 def total_duration(script: dict) -> float:

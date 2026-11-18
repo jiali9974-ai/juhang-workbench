@@ -7,11 +7,10 @@ import { useEffect, useState } from "react"
 //   #/projects            项目列表
 //   #/beauty              美颜设置（#/beauty/9.23：用这个项目的画面预览）
 //   #/flow                流程图：每一步用什么模型，可以直接改
-//   #/b/9.23              项目详情（素材、脚本、粤语版）
+//   #/b/9.23              项目详情（素材、脚本）
 //   #/b/9.23/clips        项目详情 · 素材库
-//   #/b/9.23/dub          项目详情 · 整条转粤语的成片
 //   #/b/9.23/s/9.23_01    审核某条脚本
-export type BatchTab = "scripts" | "clips" | "dub"
+export type BatchTab = "scripts" | "clips"
 
 export type Route =
   | { page: "home" }
@@ -34,7 +33,7 @@ function parse(hash: string): Route {
   if (parts[0] === "beauty") return parts[1] ? { page: "beauty", batch: parts[1] } : { page: "beauty" }
   if (parts[0] === "b" && parts[1]) {
     if (parts[2] === "s" && parts[3]) return { page: "script", batch: parts[1], id: parts[3] }
-    return { page: "batch", batch: parts[1], tab: parts[2] === "clips" ? "clips" : parts[2] === "dub" ? "dub" : "scripts" }
+    return { page: "batch", batch: parts[1], tab: parts[2] === "clips" ? "clips" : "scripts" }
   }
   return { page: "home" }
 }

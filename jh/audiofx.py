@@ -1,8 +1,4 @@
-"""成片声音处理：配音清理 + 两遍响度标准化（不抽动）+ 环境声垫底 + 限幅。
-
-一遍式 loudnorm 会边播边调音量，干净的配音会被“抽”得忽大忽小、停顿处的底噪被抬起来；
-这里先量一遍、再按固定增益调到目标响度（linear），声音和配音模型原本的一样，只是音量统一了。
-"""
+"""成片声音处理：原声两遍响度标准化、背景音乐循环混音和限幅。"""
 from __future__ import annotations
 
 import json
@@ -47,53 +43,6 @@ def load(path: Path, channels: int = 1, sr: int = SR) -> np.ndarray:
         raise RuntimeError(r.stderr.decode("utf-8", "ignore")[-500:])
     y = np.frombuffer(r.stdout, dtype=np.float32).copy()
     return y.reshape(-1, channels) if channels > 1 else y
-
-
-def rms(y: np.ndarray) -> float:
-    y = y[np.abs(y) > 1e-4]
-    return float(np.sqrt(np.mean(y ** 2))) if len(y) else 0.0
-
-
-def fade(y: np.ndarray, ms: float = 40) -> np.ndarray:
-    n = min(len(y) // 2, int(SR * ms / 1000))
-    if n > 0:
-        ramp = np.linspace(0, 1, n, dtype=np.float32)
-        if y.ndim > 1:
-            ramp = ramp[:, None]
-        y[:n] *= ramp
-        y[-n:] *= ramp[::-1]
-    return y
-
-
-def master(voice: np.ndarray, bed: np.ndarray | None, work: Path, bed_db: float = -22.0, target_i: float = -16.0) -> Path:
-    """voice：单声道配音轨；bed：立体声环境声轨（可以没有）。返回处理好的 48k 立体声 wav。"""
-    work.mkdir(parents=True, exist_ok=True)
-    raw = work / "voice_raw.wav"
-    sf.write(str(raw), np.stack([voice, voice], axis=1), SR)       # 先变立体声再量响度（单声道复制成双声道会响 3dB）
-    vn = loudnorm_2pass(raw, work / "voice_norm.wav", target_i=target_i, pre="highpass=f=70")
-    out = load(vn, channels=2)
-    v = out[:, 0]
-    if bed is not None and rms(bed) > 0:
-        n = min(len(bed), len(out))
-        gain = rms(v) * 10 ** (bed_db / 20) / rms(bed)
-        out[:n] += bed[:n] * gain
-    mixed = work / "mix_raw.wav"
-    sf.write(str(mixed), out, SR)
-    final = work / "mix.wav"
-    # 限幅到 -2dBFS：给 AAC 编码留余量（编码后峰值会比 wav 高一点）
-    r = _ff(["-i", str(mixed), "-af", "alimiter=limit=0.79:attack=5:release=50:level=false", "-ar", str(SR), "-c:a", "pcm_s16le", str(final)])
-    if r.returncode:
-        raise RuntimeError(f"限幅失败：{r.stderr[-800:]}")
-    return final
-
-
-def replace_audio(video: Path, audio: Path, out: Path) -> Path:
-    # 0:V 只取真正的画面轨：成片里可能带封面图片轨（attached_pic），带上它配 -shortest 会把视频截短
-    r = _ff(["-i", str(video), "-i", str(audio), "-map", "0:V", "-map", "1:a", "-c:v", "copy", "-c:a", "aac", "-b:a", "256k",
-             "-shortest", "-movflags", "+faststart", str(out)])
-    if r.returncode:
-        raise RuntimeError(f"替换声音失败：{r.stderr[-800:]}")
-    return out
 
 
 def loop_to(y: np.ndarray, n: int, xfade: float = 0.6) -> np.ndarray:

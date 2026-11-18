@@ -190,7 +190,7 @@ class OutputApiTests(unittest.TestCase):
         (other / "保留.mp4").write_bytes(b"keep")
         self.video("项目甲", "成片")
         self.video("项目乙", "保留成片")
-        generated = ("transcripts", "scripts", "outputs", "renders", "preview", "thumbs", "voice_refs", "dub")
+        generated = ("transcripts", "scripts", "outputs", "renders", "preview", "thumbs")
         for sub in generated:
             nested = self.root / sub / "项目甲" / "nested"
             nested.mkdir(parents=True, exist_ok=True)
@@ -362,7 +362,7 @@ class OutputApiTests(unittest.TestCase):
         queue.jobs["running"] = Job(id="running", kind="auto", title="旧项目生成", status="running", created=1)
         queue.jobs["queued"] = Job(id="queued", kind="render", title="排队出片", status="queued", created=2)
         for index in range(40):
-            queue.jobs[f"done-{index}"] = Job(id=f"done-{index}", kind="tts", title="已完成", status="done", created=100 + index)
+            queue.jobs[f"done-{index}"] = Job(id=f"done-{index}", kind="render", title="已完成", status="done", created=100 + index)
         visible = queue.list(5)
         self.assertEqual(len(visible), 5)
         self.assertEqual({job["id"] for job in visible if job["status"] in ("running", "queued")}, {"running", "queued"})

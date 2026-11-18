@@ -1,5 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react"
-import { AudioLines, Bot, ChevronRight, Clapperboard, FolderOpen, HardDrive, Loader2, Plus } from "lucide-react"
+import { Bot, ChevronRight, Clapperboard, FolderOpen, HardDrive, Loader2, Plus } from "lucide-react"
 import { AnimatePresence, motion } from "motion/react"
 import { toast } from "sonner"
 
@@ -31,7 +31,7 @@ import {
 } from "@/components/ui/sidebar"
 import { useJobs } from "@/hooks/use-jobs"
 import { go, href, type Route } from "@/hooks/use-route"
-import { api, type Batch, type Gpu, type Info, type TtsEngine } from "@/lib/api"
+import { api, type Batch, type Gpu, type Info } from "@/lib/api"
 import { minutes } from "@/lib/format"
 import { cn } from "@/lib/utils"
 
@@ -155,7 +155,6 @@ export function AppSidebar({ route }: { route: Route }) {
   const [gpu, setGpu] = useState<Gpu | null>(null)
   const [info, setInfo] = useState<Info | null>(null)
   const [batches, setBatches] = useState<Batch[]>([])
-  const [engine, setEngine] = useState<TtsEngine | null>(null)
   const [open, setOpen] = useState<Record<string, boolean>>(loadOpen)
   const [newBatch, setNewBatch] = useState<{ show: boolean; name: string; folder: string; busy: boolean }>({ show: false, name: "", folder: "", busy: false })
   const { watch } = useJobs()
@@ -163,12 +162,6 @@ export function AppSidebar({ route }: { route: Route }) {
   useEffect(() => {
     try { localStorage.setItem("jh.nav.open", JSON.stringify(open)) } catch { /* 无痕模式等情况忽略 */ }
   }, [open])
-  useEffect(() => {
-    const load = () => api.ttsEngines().then((r) => setEngine(r.engines.find((x) => x.id === r.default) ?? null)).catch(() => {})
-    load()
-    const t = setInterval(load, 8000)
-    return () => clearInterval(t)
-  }, [])
   useEffect(() => {
     api.info().then(setInfo).catch(() => {})
     const load = () => api.gpu().then(setGpu).catch(() => {})
@@ -282,7 +275,6 @@ export function AppSidebar({ route }: { route: Route }) {
 
       <SidebarFooter className="group-data-[collapsible=icon]:hidden">
         <div className="grid gap-1.5 border-t border-sidebar-border px-2 pt-3 text-xs text-muted-foreground">
-          <div className="flex items-center gap-2"><AudioLines className="size-3.5" />配音 <b className="ml-auto flex items-center gap-1.5 font-medium text-foreground/80">{engine && <span className={cn("size-1.5 rounded-full", engine.running ? "bg-ok" : engine.available ? "bg-primary" : "bg-muted-foreground/40")} title={engine.running ? "运行中" : engine.note} />}{engine?.name ?? info?.tts ?? "-"}</b></div>
           <div className="flex items-center gap-2"><Bot className="size-3.5" />智能体 <b className="ml-auto font-medium text-foreground/80">{info?.llm ?? "-"}</b>{info && !info.llm_ready && <span className="text-warn">未填 Key</span>}</div>
           <div className="flex items-center gap-2"><HardDrive className="size-3.5" />素材和成片都在本机</div>
         </div>

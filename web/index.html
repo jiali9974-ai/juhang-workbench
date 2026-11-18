@@ -150,7 +150,6 @@ h1 { font-size: 26px; margin: 2px 0 2px; font-weight: 700; letter-spacing: .5px;
 .seg { display: inline-flex; background: var(--panel); border: 1px solid var(--line); border-radius: 9px; padding: 3px; }
 .seg button { border: 0; background: none; padding: 5px 11px; border-radius: 6px; color: var(--muted); cursor: pointer; font-size: 13px; }
 .seg button.on { background: var(--panel-3); color: var(--text); box-shadow: inset 0 0 0 1px var(--line-2); }
-.voice-note { color: var(--muted); font-size: 12px; }
 .timeline { display: flex; height: 30px; border-radius: 8px; overflow: hidden; margin: 16px 0 6px; background: var(--panel); border: 1px solid var(--line); }
 .timeline div { border-right: 1px solid var(--bg); cursor: pointer; position: relative; min-width: 3px; transition: filter .15s; }
 .timeline div:hover, .timeline div.on { filter: brightness(1.35); }
@@ -244,7 +243,6 @@ const mins = (s) => (s / 60).toFixed(1);
 const shortClip = (c) => c.replace(/^\d{4}_\d\d_\d\d_[\d_]+_/, "").replace(/\.\w+$/, "");
 const langTag = (l) => `<span class="lang ${l === "yue" ? "yue" : l === "zh" ? "zh" : "other"}">${l === "yue" ? "粤" : l === "zh" ? "普" : esc(l)}</span>`;
 const ROLE = { hook: ["开头", "var(--hook)"], product: ["讲解", "var(--product)"], cta: ["结尾", "var(--cta)"] };
-const VOICE = { auto: "自动", original: "保留原声", tts_all: "全部配音" };
 const STATUS = { draft: ["待审核", "draft"], approved: ["已确认", "gold"], rendered: ["已出片", "ok"] };
 
 function toast(msg, type = "") {
@@ -261,7 +259,6 @@ const S = { batch: null, tab: "scripts", script: null, dirty: false, active: -1,
 async function loadInfo() {
   S.info = await api("/api/info");
   $("#sideFoot").innerHTML = `
-    <div>配音引擎　<b>${S.info.tts === "cosyvoice3" ? "CosyVoice3（本地）" : "Azure 粤语"}</b></div>
     <div>出脚本　　<b>${esc(S.info.llm)}</b> ${S.info.llm_ready ? "" : '<span style="color:var(--warn)">未填 Key</span>'}</div>
     <div>素材和成片都在本机，审核前不会出片</div>`;
 }
@@ -305,7 +302,7 @@ function renderWelcome() {
       <div class="flow">
         <div><b>01</b>语音识别<div class="sub">标出每句是粤语还是普通话</div></div>
         <div><b>02</b>出剪辑脚本<div class="sub">开头钩子 → 逐只表讲解 → 结尾引导</div></div>
-        <div><b>03</b>人工审核<div class="sub">改字幕、删句、试听配音</div></div>
+        <div><b>03</b>人工审核<div class="sub">改字幕、删句、调顺序</div></div>
         <div><b>04</b>出片<div class="sub">1440×2560 · 60fps · 字幕角标</div></div>
       </div>
     </div>`;
@@ -385,7 +382,7 @@ function renderScriptGrid() {
         <div class="title">${esc(s.title)}</div><span class="dur">${s.duration}s</span>
       </div>
       <div class="card-body">
-        <div class="card-meta"><span>${s.lines.length} 句</span>·<span>${s.resolved_voice === "tts_all" ? "粤语配音" : "保留原声"}${s.voice_mode === "auto" ? "（自动）" : ""}</span>${zh ? `·<span class="lang zh">普 ${zh}</span>` : ""}</div>
+        <div class="card-meta"><span>${s.lines.length} 句</span>·<span>保留原声</span>${zh ? `·<span class="lang zh">普 ${zh}</span>` : ""}</div>
         <div class="card-actions">
           <button class="btn sm" onclick="openScript('${esc(s.id)}')">审核</button>
           ${s.has_output ? `<a class="btn sm" href="/api/outputs/${enc(S.batch)}/${enc(s.id)}.mp4" download style="text-decoration:none">下载</a>` : `<button class="btn sm" onclick="renderOne('${esc(s.id)}')">出片</button>`}
@@ -439,8 +436,6 @@ function markDirty() { S.dirty = true; const el = $("#saveState"); if (el) { el.
 function renderEditor() {
   const s = S.script;
   const dur = s.lines.reduce((a, l) => a + (l.end - l.start), 0);
-  const zh = s.lines.some((l) => l.src_lang === "zh");
-  const resolved = s.voice_mode === "auto" ? (zh ? "tts_all" : "original") : s.voice_mode;
   const [stTxt, stCls] = STATUS[s.status] || STATUS.draft;
   $("#view").innerHTML = `
     <button class="back" onclick="leaveEditor()">← 返回 ${esc(S.batch)}</button>
@@ -449,9 +444,6 @@ function renderEditor() {
       <span class="badge ${stCls}">${stTxt}</span>
     </div>
     <div class="row" style="margin-top:8px">
-      <span class="sub">配音</span>
-      <div class="seg">${Object.entries(VOICE).map(([k, v]) => `<button class="${s.voice_mode === k ? "on" : ""}" onclick="setVoice('${k}')">${v}</button>`).join("")}</div>
-      <span class="voice-note">${resolved === "tts_all" ? `整条用 ${S.info.tts === "cosyvoice3" ? "CosyVoice3" : "Azure"} 粤语配音${s.voice_mode === "auto" ? "（有普通话句子）" : ""}` : "保留老板原声"}</span>
       <span class="sub" style="margin-left:auto">${s.lines.length} 句 · 原声约 ${dur.toFixed(1)} 秒</span>
     </div>
     <div class="timeline">${s.lines.map((l, i) => `<div class="${l.src_lang === "zh" ? "zh" : ""} ${i === S.active ? "on" : ""}" title="${i + 1}. ${esc(l.subtitle)}" style="flex:${Math.max(0.3, l.end - l.start)};background:${(ROLE[l.role] || ROLE.product)[1]}" onclick="focusLine(${i})"></div>`).join("")}</div>
@@ -467,12 +459,11 @@ function renderEditor() {
         </div>
       </div>
       <div class="preview-col">
-        <div class="phone"><div class="phone-screen" id="screen"><div>点句子右边的「原片」或「配音」预览<br>出片后这里播放成片</div></div></div>
+        <div class="phone"><div class="phone-screen" id="screen"><div>点句子右边的「原片」预览<br>出片后这里播放成片</div></div></div>
         <div class="preview-cap" id="previewCap"></div>
         <div class="row" id="previewBtns">${s.has_output ? `<button class="btn sm" onclick="showOutput()">看成片</button><a class="btn sm" style="text-decoration:none" href="/api/outputs/${enc(S.batch)}/${enc(s.id)}.mp4" download>下载 MP4</a>` : ""}</div>
       </div>
-    </div>
-    <audio id="ttsAudio"></audio>`;
+    </div>`;
   if (S.dirty) markDirty();
 }
 
@@ -490,7 +481,7 @@ function lineHtml(l, i) {
     </div>
     <div class="sub-col">
       <textarea rows="1" oninput="S.script.lines[${i}].subtitle=this.value;markDirty();updCount(${i},this.value)" onfocus="S.active=${i}">${esc(l.subtitle)}</textarea>
-      <div class="sub-info"><span>粤语字幕 · 也是配音文案</span><span id="cnt${i}" class="${chunkWarn(l.subtitle) ? "warn" : ""}">${n} 字${chunkWarn(l.subtitle) ? " · 单段太长，建议加逗号" : ""}</span></div>
+      <div class="sub-info"><span>字幕 · 对应素材原话</span><span id="cnt${i}" class="${chunkWarn(l.subtitle) ? "warn" : ""}">${n} 字${chunkWarn(l.subtitle) ? " · 单段太长，建议加逗号" : ""}</span></div>
     </div>
     <div class="ctl">
       <div class="row">
@@ -499,7 +490,6 @@ function lineHtml(l, i) {
       </div>
       <div class="row">
         <button class="btn sm" onclick="previewSrc(${i})">原片</button>
-        <button class="btn sm" onclick="previewTts(${i})">配音</button>
         <button class="btn sm icon" title="上移" onclick="moveLine(${i},-1)">↑</button>
         <button class="btn sm icon" title="下移" onclick="moveLine(${i},1)">↓</button>
         <button class="btn sm icon danger" title="删除这句" onclick="delLine(${i})">✕</button>
@@ -512,7 +502,6 @@ function updCount(i, v) {
   el.textContent = `${n} 字${w ? " · 单段太长，建议加逗号" : ""}`; el.className = w ? "warn" : "";
 }
 function focusLine(i) { S.active = i; renderEditor(); $("#line" + i).scrollIntoView({ behavior: "smooth", block: "center" }); previewSrc(i); }
-function setVoice(k) { S.script.voice_mode = k; markDirty(); renderEditor(); }
 function moveLine(i, d) { const L = S.script.lines, j = i + d; if (j < 0 || j >= L.length) return; [L[i], L[j]] = [L[j], L[i]]; markDirty(); renderEditor(); }
 function delLine(i) { S.script.lines.splice(i, 1); markDirty(); renderEditor(); toast(`已删除第 ${i + 1} 句，保存后生效`); }
 function leaveEditor() { if (S.dirty && !confirm("有未保存的修改，确定返回？")) return; S.dirty = false; S.script = null; renderBatch(); }
@@ -529,16 +518,9 @@ function previewSrc(i) {
   const url = `/api/preview_clip?batch=${enc(S.batch)}&clip=${enc(l.clip)}&start=${l.start}&end=${l.end}`;
   setScreen(`<video controls autoplay src="${url}"></video>`, `第 ${i + 1} 句原片 · ${langTag(l.src_lang)} ${esc(l.src_text)}`);
 }
-async function previewTts(i) {
-  const l = S.script.lines[i];
-  toast(`正在生成第 ${i + 1} 句配音…`);
-  const j = await api("/api/tts/preview", { method: "POST", body: JSON.stringify({ text: l.subtitle }) });
-  watchJob(j.id, (job) => { const a = $("#ttsAudio"); if (!a) return; a.src = "/api/tts/file?path=" + enc(job.result); a.play(); $("#previewCap").innerHTML = `正在播放第 ${i + 1} 句粤语配音：${esc(l.subtitle)}`; });
-}
-
 function cleanScript(status) {
   const s = { ...S.script };
-  ["duration", "resolved_voice", "has_output"].forEach((k) => delete s[k]);
+  ["duration", "has_output"].forEach((k) => delete s[k]);
   if (status) s.status = status;
   return s;
 }

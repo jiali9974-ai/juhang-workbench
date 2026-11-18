@@ -34,7 +34,6 @@ class RequiredMattingTests(unittest.TestCase):
         with patch.object(render.config, "data_root", return_value=self.root / "data"), \
              patch.object(render.config, "output_root", return_value=self.root / "outputs"), \
              patch.object(render.config, "load", return_value={"render": {"cover": {"enabled": True}}}), \
-             patch.object(render.scriptmod, "resolved_voice_mode", return_value="original"), \
              patch.object(render, "plan", return_value=[]), patch.object(render.look, "current", return_value={}), \
              patch.object(cover, "make_best_cover", side_effect=RuntimeError("主抠图模型不可用")), \
              patch.object(render, "compose_segments") as encode:

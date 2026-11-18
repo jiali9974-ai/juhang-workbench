@@ -10,7 +10,6 @@ export function pipelineStage(job: Job): string | null {
   if (job.kind === "generate") return /脚本/.test(job.message) ? "script" : "asr"
   if (job.kind === "auto" && job.progress < 2 / 3) return job.progress < 1 / 3 ? "asr" : "script"
   if (/封面/.test(job.message)) return "cover"
-  if (/配音/.test(job.message)) return "tts"
   if (/片段|口误/.test(job.message)) return "look"
   return job.kind === "auto" || job.kind === "render" ? "render" : null
 }

@@ -257,7 +257,7 @@ export function FlowPage({ batch, jobId }: { batch?: string; jobId?: string }) {
     }
   }
 
-  const steps = p?.branches.find((b) => b.id === "clip")?.steps.filter((s) => s.id !== "tts" || !s.off || stage === "tts") ?? []
+  const steps = p?.branches.find((b) => b.id === "clip")?.steps ?? []
   const selected = steps.find((s) => s.id === open)
 
   if (error) {
