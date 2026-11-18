@@ -20,7 +20,9 @@
   NVIDIA 记录：[k8s-device-plugin#1282](https://github.com/NVIDIA/k8s-device-plugin/issues/1282)。
   默认保留素材原声，不安装图生视频模型。
 - 服务监听 `6006`，通过控制台「自定义服务」访问。
-- 后台进程由独立 Supervisor 管理，`/etc/autodl.sh` 调用 `automation/start.sh` 开机启动。
+- 后台进程由独立 Supervisor 管理，`/etc/autodl.sh` 在后台调用系统盘上的
+  `/root/.jh-workbench/boot.sh`，等待克隆的数据盘及环境到位后，再调用 `automation/start.sh`。
+  开机等待器来自 `deploy/autodl/boot.sh`，避免首次开机早于数据盘复制完成时漏掉自启。
 - 可在无卡模式完成安装、更新和保存镜像。每次启动都会重新检测当前实例设备：无卡时使用 CPU，
   克隆到带卡实例后自动切换 GPU 识别，并在 NVENC 实测通过后启用硬编码；不会自动创建出片任务。
 - 克隆实例时必须勾选「数据盘」：环境、模型和源码版本在 `/root/autodl-tmp/jh-workbench`。
