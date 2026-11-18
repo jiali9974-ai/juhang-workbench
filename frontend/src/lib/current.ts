@@ -29,7 +29,8 @@ export function pickCurrent(batches: Batch[]): string | null {
 
 /** 任务是不是这个项目的：「9.23 一键出片」「9.23_01 出片」「加载文件夹到 9.23」 */
 export function jobOf(j: Job, batch: string) {
-  return j.title.startsWith(`${batch} `) || j.title.startsWith(`${batch}_`) || j.title === `加载文件夹到 ${batch}`
+  return j.title.startsWith(`${batch} `) || j.title === `加载文件夹到 ${batch}`
+    || (j.kind === "render" && j.title.startsWith(`${batch}_`) && /^\d+ 出片$/.test(j.title.slice(batch.length + 1)))
 }
 
 /** 默认项目名：今天的日期，和素材文件夹的习惯一致（11.17） */

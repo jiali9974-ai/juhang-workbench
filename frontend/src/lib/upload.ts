@@ -44,19 +44,20 @@ export function isVideo(f: File) {
 
 /**
  * 拖进来的东西里取出全部文件：拖的是文件夹就把里面（含子文件夹）的文件都找出来。
- * folder：只拖了一个文件夹时是它的名字，用来给项目起名。
+ * 每个顶层文件夹单独返回一组，包含全部子文件夹；散选视频归为另一组。
  * 注意：必须在 drop 事件里直接调用（第一个 await 之前就把条目取出来了，事件结束后就取不到了）。
  */
-export async function filesFromDrop(dt: DataTransfer): Promise<{ files: File[]; folder: string | null }> {
+export interface UploadGroup { files: File[]; folder: string | null }
+
+export async function filesFromDrop(dt: DataTransfer): Promise<UploadGroup[]> {
   const entries = Array.from(dt.items ?? [])
     .filter((i) => i.kind === "file")
     .map((i) => i.webkitGetAsEntry?.() ?? null)
     .filter((x): x is FileSystemEntry => !!x)
   const plain = Array.from(dt.files)
-  if (!entries.length) return { files: plain, folder: null }
+  if (!entries.length) return plain.length ? [{ files: plain, folder: folderOf(plain) }] : []
 
-  const files: File[] = []
-  const walk = async (entry: FileSystemEntry): Promise<void> => {
+  const walk = async (entry: FileSystemEntry, files: File[]): Promise<void> => {
     if (entry.isFile) {
       files.push(await new Promise<File>((res, rej) => (entry as FileSystemFileEntry).file(res, rej)))
     } else if (entry.isDirectory) {
@@ -65,13 +66,21 @@ export async function filesFromDrop(dt: DataTransfer): Promise<{ files: File[]; 
       for (;;) {
         const chunk = await new Promise<FileSystemEntry[]>((res, rej) => reader.readEntries(res, rej))
         if (!chunk.length) break
-        for (const e of chunk) await walk(e)
+        for (const e of chunk) await walk(e, files)
       }
     }
   }
-  for (const e of entries) await walk(e)
-  const only = entries.length === 1 && entries[0].isDirectory ? entries[0].name : null
-  return { files, folder: only }
+  const groups: UploadGroup[] = []
+  const loose: File[] = []
+  for (const entry of entries) {
+    if (entry.isDirectory) {
+      const files: File[] = []
+      await walk(entry, files)
+      groups.push({ files, folder: entry.name })
+    } else await walk(entry, loose)
+  }
+  if (loose.length) groups.push({ files: loose, folder: null })
+  return groups
 }
 
 /** 「选择文件夹」选出来的文件：取最外层文件夹名 */

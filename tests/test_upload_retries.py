@@ -1,6 +1,8 @@
 import asyncio
 import tempfile
+import threading
 import unittest
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import patch
 
@@ -90,6 +92,23 @@ class UploadRetryTests(unittest.TestCase):
         self.assertTrue(receipts.exists())
         self.assertEqual(self.client.delete("/api/batches/原项目").status_code, 200)
         self.assertFalse(receipts.exists())
+
+    def test_concurrent_same_folder_creation_returns_a_retryable_duplicate_error(self):
+        folder = self.materials / "同名文件夹"
+        barrier = threading.Barrier(2)
+        mkdir = Path.mkdir
+
+        def concurrent_mkdir(path, *args, **kwargs):
+            if path == folder:
+                barrier.wait(timeout=3)
+            return mkdir(path, *args, **kwargs)
+
+        with patch.object(Path, "mkdir", concurrent_mkdir), ThreadPoolExecutor(max_workers=2) as pool:
+            results = list(pool.map(lambda _: TestClient(server.app).post("/api/batches", json={"name": "同名文件夹"}), range(2)))
+        self.assertEqual(sorted(result.status_code for result in results), [200, 400])
+        duplicate = next(result for result in results if result.status_code == 400)
+        self.assertIn("已经有叫", duplicate.json()["detail"])
+        self.assertTrue(folder.is_dir())
 
 
 if __name__ == "__main__":

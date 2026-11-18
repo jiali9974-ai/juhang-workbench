@@ -77,7 +77,7 @@ export function DropZone({ onFiles, big, batch }: { onFiles: (f: FileList) => vo
 export function UploadList({ items, onCancel, onClear, onRetry, onRetryFailed, maxVisibleItems }: {
   items: UploadItem[]
   onCancel: (k: string) => void
-  onClear: () => void
+  onClear?: () => void
   onRetry: (key: string) => void
   onRetryFailed: () => void
   maxVisibleItems?: number
@@ -95,7 +95,7 @@ export function UploadList({ items, onCancel, onClear, onRetry, onRetryFailed, m
           {done}/{items.length} 完成
           {failed > 0 && <button className="text-gold-ink hover:underline" onClick={onRetryFailed}>重试失败项（{failed}）</button>}
           {active.length > 0 && <button className="text-muted-foreground hover:text-foreground hover:underline" onClick={() => active.forEach((item) => onCancel(item.key))}>取消全部上传</button>}
-          {done + cancelled > 0 && <button className="text-gold-ink hover:underline" onClick={onClear}>清除已结束</button>}
+          {done + cancelled > 0 && onClear && <button className="text-gold-ink hover:underline" onClick={onClear}>清除已结束</button>}
         </span>
       </div>
       <div className="scrollbar-thin max-h-64 overflow-y-auto"

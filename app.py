@@ -216,9 +216,10 @@ def create_batch(data: dict = Body(...)):
     if not name or name in (".", ".."):
         raise HTTPException(400, "项目名不能为空，也不能有 \\ / : * ? \" < > | 这些字符")
     d = config.material_root() / name
-    if d.exists():
+    try:
+        d.mkdir(parents=True)
+    except FileExistsError:
         raise HTTPException(400, f"已经有叫「{name}」的项目了")
-    d.mkdir(parents=True)
     job = jobs.submit("import", f"加载文件夹到 {name}", lambda pr: _import_folder(name, folder, pr)).to_dict() if folder else None
     return {"batch": name, "job": job}
 
