@@ -1,4 +1,6 @@
 import json
+import tempfile
+from pathlib import Path
 import unittest
 from types import SimpleNamespace
 from unittest.mock import Mock, patch
@@ -7,6 +9,13 @@ from jh import llm, script_agent
 
 
 class AllSourcePlanningTests(unittest.TestCase):
+    def setUp(self):
+        temp = tempfile.TemporaryDirectory()
+        self.addCleanup(temp.cleanup)
+        replacement = patch.object(script_agent.config, "data_root", return_value=Path(temp.name))
+        replacement.start()
+        self.addCleanup(replacement.stop)
+
     def transcripts(self, count=75):
         return [{"clip": f"原片_{index:03d}.mov", "duration": 60, "sentences": [
             {"start": 0.0, "end": 60.0, "lang": "zh", "text": f"这只表的独有配件编号是{10000 + index}，请完整保留这项信息"},
@@ -56,7 +65,8 @@ class AllSourcePlanningTests(unittest.TestCase):
 
     def test_empty_input_does_not_call_a_model(self):
         with patch.object(script_agent.llm, "chat") as chat:
-            self.assertEqual(script_agent.generate("空项目", []), [])
+            with self.assertRaisesRegex(RuntimeError, "没有有效口播"):
+                script_agent.generate("空项目", [])
         chat.assert_not_called()
 
     def test_model_context_error_is_reported_without_truncating_or_retrying_partial_sources(self):

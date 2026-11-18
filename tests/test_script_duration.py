@@ -34,7 +34,8 @@ class ScriptDurationTests(unittest.TestCase):
             {"start": 0.0, "end": 8.0, "lang": "zh", "text": "介绍这只表"},
         ]}
         with patch.object(script_agent, "_ask", return_value={"videos": [{"lines": [{"ref": "C9-S9"}]}]}):
-            self.assertEqual(script_agent.generate("11.18", [transcript]), [])
+            with self.assertRaisesRegex(RuntimeError, "没有生成有效剪辑脚本"):
+                script_agent.generate("11.18", [transcript])
 
 
 if __name__ == "__main__":
