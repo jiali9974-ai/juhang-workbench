@@ -15,7 +15,7 @@ from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel, Field
 from starlette.background import BackgroundTask
 
-from jh import asr, config, deletion, media, outputs, render, script as scriptmod, tts
+from jh import asr, config, deletion, media, outputs, render, script as scriptmod, tts, uploads
 from jh.jobs import JobQueue
 
 app = FastAPI(title="巨航剪辑工作台")
@@ -224,31 +224,18 @@ def create_batch(data: dict = Body(...)):
 
 
 @app.put("/api/batches/{batch}/upload")
-async def upload_clip(batch: str, request: Request, filename: str):
-    """上传一条视频素材：边收边写硬盘，几个 GB 的文件也不占内存。同名文件自动改名，不覆盖。"""
+async def upload_clip(batch: str, request: Request, filename: str,
+                      upload_id: str | None = None, expected_size: int | None = None):
+    """流式上传；同一队列项重试返回原结果，新素材同名时改名保存。"""
     d = _batch_dir(batch)
     name = _safe_name(Path(filename).name)
     ext = Path(name).suffix.lower()
     if ext not in media.VIDEO_EXTS:
         raise HTTPException(400, f"只支持 {'、'.join(sorted(media.VIDEO_EXTS))} 视频文件")
-    stem, target, n = Path(name).stem, d / name, 1
-    while target.exists():
-        n += 1
-        target = d / f"{stem}_{n}{ext}"
-    part = target.with_suffix(target.suffix + ".part")
-    size = 0
-    try:
-        with open(part, "wb") as f:
-            async for chunk in request.stream():
-                f.write(chunk)
-                size += len(chunk)
-        if size == 0:
-            raise HTTPException(400, "文件是空的")
-        part.rename(target)
-    except BaseException:
-        part.unlink(missing_ok=True)
-        raise
-    return {"clip": target.name, "size": size}
+    if expected_size is None and request.headers.get("content-length"):
+        expected_size = int(request.headers["content-length"])
+    return await uploads.receive(d, config.data_root(), name, request.stream(),
+                                 upload_id=upload_id, expected_size=expected_size)
 
 
 
@@ -701,7 +688,7 @@ def delete_batch(batch: str):
         raise HTTPException(409, "这个项目还有任务在跑，等跑完再删")
     root = config.data_root()
     targets = [(config.material_root(), batch), (config.output_root(), batch)]
-    targets.extend((root / sub, batch) for sub in ("transcripts", "scripts", "renders", "preview", "thumbs", "voice_refs", "dub"))
+    targets.extend((root / sub, batch) for sub in ("transcripts", "scripts", "renders", "preview", "thumbs", "voice_refs", "dub", "upload_receipts"))
     targets.append((root / "clipinfo", f"{batch}.json"))
     try:
         deletion.delete_children(targets)

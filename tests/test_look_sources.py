@@ -132,7 +132,8 @@ class LookSourceTests(unittest.TestCase):
         source_out = self.root / "raw.jpg"
         frame = np.zeros((320, 180, 3), dtype=np.uint8)
         candidate = {"clip": str(seg.clip), "t": 3.75, "zoom": 1.15}
-        with patch.object(cover, "candidates", return_value=([candidate], {"ear": .3})), \
+        with patch.object(cover, "_birefnet", return_value=object()), \
+             patch.object(cover, "candidates", return_value=([candidate], {"ear": .3})), \
              patch.object(cover, "face_problems", return_value=[]), patch.object(cover, "face_score", return_value=1), \
              patch.object(cover, "face_metrics", return_value={}), patch.object(cover, "_grab", return_value=frame), \
              patch.object(cover, "_person_mask", return_value=(np.zeros((320, 180)), {})), \
@@ -147,7 +148,8 @@ class LookSourceTests(unittest.TestCase):
         seg = SimpleNamespace(clip=self.root / "source.MOV", v_start=2.2, v_dur=.8, zoom=1.05)
         destination = self.root / "cover.png"
         source_out = self.root / "raw.jpg"
-        with patch.object(cover, "candidates", return_value=([], {})), patch.object(cover, "make_cover"), \
+        with patch.object(cover, "_birefnet", return_value=object()), \
+             patch.object(cover, "candidates", return_value=([], {})), patch.object(cover, "make_cover"), \
              patch.object(look_sources, "save") as save:
             cover.make_best_cover([seg], [], destination, settings=self.off, source_out=source_out)
         save.assert_called_once_with(seg.clip, 2.6, 1.05, source_out)

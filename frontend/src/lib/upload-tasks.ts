@@ -87,7 +87,7 @@ export class UploadTaskStore {
           const transfer = this.transport(item.batch, item.file, (loaded) => {
             const seconds = (performance.now() - started) / 1000
             this.patch(key, { loaded, speed: seconds > 0.5 ? loaded / seconds : undefined })
-          })
+          }, item.key)
           this.current = { key, abort: transfer.abort }
           await transfer.promise
           this.patch(key, { loaded: item.file.size, status: "done" })
@@ -110,6 +110,17 @@ export class UploadTaskStore {
     this.items = this.items.filter((row) => row.key !== key)
     if (this.current?.key === key) this.current.abort()
     this.publish(item.scope)
+  }
+  retry(key: string) {
+    const item = this.items.find((row) => row.key === key)
+    if (!item || item.status !== "error") return false
+    this.patch(key, { status: "queued", loaded: 0, speed: undefined, error: undefined })
+    this.pending.push(key)
+    void this.pump()
+    return true
+  }
+  retryFailed(keys: string[]) {
+    return keys.reduce((count, key) => count + Number(this.retry(key)), 0)
   }
   clearDone(scope: string) {
     this.items = this.items.filter((row) => row.scope !== scope || row.status !== "done")

@@ -1,6 +1,6 @@
 // 首页：一个上传框。拖入视频或整个文件夹 → 传完点「开始生成」→ 进入生成页。
 import { useCallback, useRef, useState } from "react"
-import { Check, CircleAlert, FileVideo, FolderUp, Loader2, X } from "lucide-react"
+import { Check, CircleAlert, FileVideo, FolderUp, Loader2, RefreshCw, X } from "lucide-react"
 import { AnimatePresence, motion } from "motion/react"
 import { toast } from "sonner"
 
@@ -179,6 +179,9 @@ export function StartPage() {
                     {queue.busy ? `上传中 ${done}/${queue.items.length}` : `已上传 ${done} 个视频`}
                   </span>
                   <span className="text-xs text-muted-foreground tabular">
+                    {queue.items.some((item) => item.status === "error") && (
+                      <button className="mr-3 text-gold-ink hover:underline" onClick={queue.retryFailed}>重试失败项</button>
+                    )}
                     {fmtSize(loaded)} / {fmtSize(bytes)}
                   </span>
                 </div>
@@ -198,14 +201,17 @@ export function StartPage() {
                           : it.status === "error" ? <CircleAlert className="size-3.5 shrink-0 text-destructive" />
                           : it.status === "uploading" ? <Loader2 className="size-3.5 shrink-0 animate-spin" />
                           : <FileVideo className="size-3.5 shrink-0 text-muted-foreground" />}
-                        <span className="min-w-0 flex-1 truncate">{it.file.name}</span>
-                        <span className={cn("shrink-0 text-xs tabular", it.status === "error" ? "text-destructive" : "text-muted-foreground")}>
+                        <span className="min-w-0 flex-1 truncate" title={`${it.file.name} · 项目：${it.batch}`}>{it.file.name}</span>
+                        <span title={it.error} className={cn("max-w-[40%] shrink-0 truncate text-xs tabular", it.status === "error" ? "text-destructive" : "text-muted-foreground")}>
                           {it.status === "error" ? it.error
                             : it.status === "uploading" ? `${Math.round((it.loaded / (it.file.size || 1)) * 100)}%`
                             : it.status === "queued" ? "排队" : fmtSize(it.file.size)}
                         </span>
                         {(it.status === "queued" || it.status === "uploading") && (
                           <button title="取消" onClick={() => queue.cancel(it.key)} className="text-muted-foreground hover:text-foreground"><X className="size-3.5" /></button>
+                        )}
+                        {it.status === "error" && (
+                          <Button size="sm" variant="ghost" className="h-6 gap-1 px-1.5" title={`重新上传到「${it.batch}」`} aria-label={`重试上传 ${it.file.name} 到项目 ${it.batch}`} onClick={() => queue.retry(it.key)}><RefreshCw className="size-3" />重试</Button>
                         )}
                       </div>
                     ))}

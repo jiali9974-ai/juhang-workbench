@@ -1,5 +1,5 @@
 import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from "react"
-import { Check, CircleAlert, FileVideo, Loader2, UploadCloud, X } from "lucide-react"
+import { Check, CircleAlert, FileVideo, Loader2, RefreshCw, UploadCloud, X } from "lucide-react"
 import { AnimatePresence, motion } from "motion/react"
 import { toast } from "sonner"
 
@@ -36,10 +36,12 @@ export function useUploadQueue(batch: string, onUploaded: () => void, context?: 
     toast(`开始上传 ${good.length} 个视频`, { description: `共 ${fmtSize(good.reduce((sum, file) => sum + file.size, 0))}` })
   }, [batch, scope])
   const cancel = useCallback((key: string) => uploadTasks.cancel(key), [])
+  const retry = useCallback((key: string) => uploadTasks.retry(key), [])
+  const retryFailed = useCallback(() => uploadTasks.retryFailed(getSnapshot().items.map((item) => item.key)), [getSnapshot])
   const clearDone = useCallback(() => !context && batch ? uploadTasks.clearBatchDone(batch) : uploadTasks.clearDone(scope), [batch, context, scope])
   const reset = useCallback(() => uploadTasks.reset(scope), [scope])
   const busy = snapshot.items.some((item) => item.status === "queued" || item.status === "uploading")
-  return { items: snapshot.items, batch: snapshot.batch || batch || null, add, cancel, clearDone, reset, busy }
+  return { items: snapshot.items, batch: snapshot.batch || batch || null, add, cancel, retry, retryFailed, clearDone, reset, busy }
 }
 
 export function useAllUploads() { return useSyncExternalStore(uploadTasks.subscribe, uploadTasks.getAll, uploadTasks.getAll) }
@@ -71,19 +73,26 @@ export function DropZone({ onFiles, big, batch }: { onFiles: (f: FileList) => vo
   )
 }
 
-export function UploadList({ items, onCancel, onClear, maxVisibleItems }: {
+export function UploadList({ items, onCancel, onClear, onRetry, onRetryFailed, maxVisibleItems }: {
   items: UploadItem[]
   onCancel: (k: string) => void
   onClear: () => void
+  onRetry: (key: string) => void
+  onRetryFailed: () => void
   maxVisibleItems?: number
 }) {
   if (!items.length) return null
   const done = items.filter((x) => x.status === "done").length
+  const failed = items.filter((x) => x.status === "error").length
   return (
     <div className="soft-shadow mt-3 rounded-xl border bg-card">
       <div className="flex items-center justify-between border-b px-4 py-2.5 text-sm">
         <b>上传队列</b>
-        <span className="text-xs text-muted-foreground">{done}/{items.length} 完成 {done > 0 && <button className="ml-2 text-gold-ink hover:underline" onClick={onClear}>清除已完成</button>}</span>
+        <span className="flex flex-wrap items-center justify-end gap-2 text-xs text-muted-foreground">
+          {done}/{items.length} 完成
+          {failed > 0 && <button className="text-gold-ink hover:underline" onClick={onRetryFailed}>重试失败项（{failed}）</button>}
+          {done > 0 && <button className="text-gold-ink hover:underline" onClick={onClear}>清除已完成</button>}
+        </span>
       </div>
       <div className="scrollbar-thin max-h-64 overflow-y-auto"
         style={maxVisibleItems ? { maxHeight: `${maxVisibleItems * 3}rem` } : undefined}>
@@ -97,8 +106,8 @@ export function UploadList({ items, onCancel, onClear, maxVisibleItems }: {
                   : it.status === "uploading" ? <Loader2 className="size-4 animate-spin text-gold-ink" /> : <FileVideo className="size-4 text-muted-foreground" />}
                 <div className="min-w-0">
                   <div className="flex justify-between gap-2 text-[13px]">
-                    <span className="truncate">{it.file.name}</span>
-                    <span className="shrink-0 text-xs text-muted-foreground tabular">
+                    <span className="truncate" title={`${it.file.name} · 项目：${it.batch}`}>{it.file.name}</span>
+                    <span className="max-w-[45%] shrink-0 truncate text-xs text-muted-foreground tabular" title={it.error}>
                       {it.status === "error" ? <span className="text-destructive">{it.error}</span>
                         : it.status === "done" ? fmtSize(it.file.size)
                         : it.status === "queued" ? `排队 · ${fmtSize(it.file.size)}`
@@ -112,6 +121,8 @@ export function UploadList({ items, onCancel, onClear, maxVisibleItems }: {
                 </div>
                 {(it.status === "queued" || it.status === "uploading") ? (
                   <Button size="icon-xs" variant="ghost" title="取消" onClick={() => onCancel(it.key)}><X /></Button>
+                ) : it.status === "error" ? (
+                  <Button size="sm" variant="ghost" className="h-6 gap-1 px-1.5" title={`重新上传到「${it.batch}」`} aria-label={`重试上传 ${it.file.name} 到项目 ${it.batch}`} onClick={() => onRetry(it.key)}><RefreshCw className="size-3" />重试</Button>
                 ) : <span className="size-6" />}
               </motion.div>
             )

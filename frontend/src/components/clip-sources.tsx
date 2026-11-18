@@ -71,7 +71,7 @@ export function ClipSources({ batch, queue, big, onChanged }: { batch: string; q
         </div>
       </div>
       <p className="mt-1.5 text-xs text-muted-foreground">本机路径加载：同一块硬盘用硬链接，几十 GB 也是秒加、不占额外空间；子文件夹里的视频会一起加进来，重复的自动跳过。</p>
-      <UploadList items={queue.items} onCancel={queue.cancel} onClear={queue.clearDone} />
+      <UploadList items={queue.items} onCancel={queue.cancel} onClear={queue.clearDone} onRetry={queue.retry} onRetryFailed={queue.retryFailed} />
     </div>
   )
 }

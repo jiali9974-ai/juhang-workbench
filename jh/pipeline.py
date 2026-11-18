@@ -142,8 +142,8 @@ def describe() -> dict:
     enc = _f("render.encoder", "视频编码", "select", r["encoder"], ENCODERS, f"{r['width']}×{r['height']} · {r['fps']}fps · {r['bitrate']}")
     matting_dir = config.data_root() / ((r.get("cover") or {}).get("matting_model") or "models/BiRefNet-portrait")
     matting_note = (
-        "模型文件已就绪；优先用于封面人像抠图，显卡不可用或加载失败时使用备用分割。"
-        if (matting_dir / "model.safetensors").exists() else "未找到模型权重，封面将使用备用人像分割。"
+        "仅使用此模型抠图；显卡不可用或模型加载失败时停止出片并提示原因。"
+        if (matting_dir / "model.safetensors").exists() else "未找到模型权重，需要补齐此模型后才能生成封面。"
     )
 
     clip = {
@@ -163,7 +163,6 @@ def describe() -> dict:
              "fields": [
                  _info("主抠图模型", matting_dir.name, matting_note),
                  _info("身体与手部定位", "MediaPipe Pose + Hands", "限制抠图范围，只保留人物身体、手臂和手。"),
-                 _info("备用人像分割", "MediaPipe Selfie + Pose", "主抠图模型不可用时自动使用。"),
                  _info("封面选帧", "MediaPipe FaceMesh", "检查人脸朝向、睁眼和表情，选取自然的封面画面。"),
              ]},
             {"id": "render", "title": "出片", "desc": "裁切放大 → 拼接 → 字幕 → 响度统一 → 背景音乐", "fields": [enc]},

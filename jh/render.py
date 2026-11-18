@@ -714,9 +714,9 @@ def render(script: dict, progress=None, on_stage=None) -> Path:
             from PIL import Image as _Image                 # cv2.imread 不认中文路径，用 PIL 存 jpg
 
             _Image.open(cover).convert("RGB").save(out_dir / f"{script['id']}_封面.jpg", quality=92)
-        except Exception as e:  # noqa: BLE001  封面做不出来不影响出片
+        except Exception as e:  # noqa: BLE001
             (work / "cover_error.txt").write_text(repr(e), encoding="utf-8")
-            cover = None
+            raise RuntimeError(f"封面生成失败，已停止出片：{e}") from e
     total = compose_segments(segs, work, out, progress, cover=cover, settings=settings, on_stage=on_stage)
     cover_jpg = out_dir / f"{script['id']}_封面.jpg"
     if cover and cover_jpg.exists():

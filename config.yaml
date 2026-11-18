@@ -110,7 +110,7 @@ render:
     enabled: true
     seconds: 0.034                        # 封面在成片开头显示多久（参考视频就第一帧）
     bg_blur: 6                            # 背景虚化
-    matting_model: "models/BiRefNet-portrait"   # 封面抠人用的模型（data 目录下；BiRefNet-portrait，MIT 可商用）。删掉这个文件夹就退回 mediapipe
+    matting_model: "models/BiRefNet-portrait"   # 唯一的人像抠图模型；缺少权重或 GPU 时停止出片，不切换备用分割
     bg_dim: 0.92
     outline_ratio: 0.016                  # 人物白描边宽度（画面宽度比例）
     char_ratio: 0.08                      # 标题每个字约占画面宽度 8%

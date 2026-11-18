@@ -79,6 +79,63 @@ test("某个文件上传失败后仍继续后续文件", async () => {
   assert.deepEqual(store.getSnapshot("scope").items.map((item) => item.status), ["error", "done"])
 })
 
+test("失败项在切到另一个项目后仍重传到原项目，并保留上传编号防止重复", async () => {
+  const calls: { batch: string; file: File; id?: string; transfer: ReturnType<typeof deferred<{ clip: string; size: number }>> }[] = []
+  const uploaded: string[] = []
+  const store = new UploadTaskStore((batch, file, progress, id) => {
+    const transfer = deferred<{ clip: string; size: number }>()
+    calls.push({ batch, file, id, transfer })
+    progress(file.size / 2, file.size)
+    return { promise: transfer.promise, abort: () => {} }
+  }, (item) => uploaded.push(item.batch))
+  const file = new File(["original"], "原素材.mp4")
+  store.add("projects", "原项目", [file])
+  const key = store.getSnapshot("projects").items[0].key
+  calls[0].transfer.reject(new Error("网络中断"))
+  await setImmediate()
+  const unsubscribe = store.subscribe(() => {})
+  unsubscribe()
+  store.add("projects", "新项目", [new File(["next"], "新素材.mp4")])
+  assert.equal(store.retry(key), true)
+  assert.equal(store.retry(key), false) // 快速连点不能重复入队。
+  assert.equal(store.retry("不存在"), false)
+  const queued = store.getSnapshot("projects").items.find((item) => item.key === key)!
+  assert.deepEqual([queued.status, queued.loaded, queued.error, queued.speed], ["queued", 0, undefined, undefined])
+  calls[1].transfer.resolve({ clip: "新素材.mp4", size: 4 })
+  await setImmediate()
+  assert.deepEqual(calls.map((call) => call.batch), ["原项目", "新项目", "原项目"])
+  assert.equal(calls[2].file, file)
+  assert.equal(calls[0].id, calls[2].id)
+  calls[2].transfer.resolve({ clip: file.name, size: file.size })
+  await setImmediate()
+  assert.equal(store.getBatchSnapshot("原项目").items[0].status, "done")
+  assert.equal(store.retry(key), false)
+  assert.deepEqual(uploaded, ["新项目", "原项目"])
+})
+
+test("批量重试只处理选定队列中的失败项，连续失败后仍可再次重试", async () => {
+  const calls: { batch: string; transfer: ReturnType<typeof deferred<{ clip: string; size: number }>> }[] = []
+  const store = new UploadTaskStore((batch) => {
+    const transfer = deferred<{ clip: string; size: number }>()
+    calls.push({ batch, transfer })
+    return { promise: transfer.promise, abort: () => {} }
+  })
+  store.add("one", "项目甲", [new File(["a"], "a.mp4"), new File(["b"], "b.mp4")])
+  calls[0].transfer.reject(new Error("离线")); await setImmediate()
+  calls[1].transfer.reject(new Error("离线")); await setImmediate()
+  store.add("two", "项目乙", [new File(["c"], "c.mp4")])
+  calls[2].transfer.reject(new Error("离线")); await setImmediate()
+  const keys = store.getSnapshot("one").items.map((item) => item.key)
+  assert.equal(store.retryFailed([...keys, keys[0]]), 2)
+  calls[3].transfer.reject(new Error("再次中断")); await setImmediate()
+  calls[4].transfer.resolve({ clip: "b.mp4", size: 1 }); await setImmediate()
+  assert.equal(store.getSnapshot("two").items[0].status, "error")
+  assert.equal(store.retryFailed(keys), 1)
+  calls[5].transfer.resolve({ clip: "a.mp4", size: 1 }); await setImmediate()
+  assert.deepEqual(store.getSnapshot("one").items.map((item) => item.status), ["done", "done"])
+  assert.equal(calls.length, 6)
+})
+
 test("导出等请求在页面订阅移除后继续，返回期间重复提交会复用同一请求", async () => {
   const store = new BackgroundTaskStore()
   const completion = deferred<string>()

@@ -4,14 +4,24 @@ export interface UploadResult {
   size: number
 }
 
-export function uploadClip(batch: string, file: File, onProgress: (loaded: number, total: number) => void): { promise: Promise<UploadResult>; abort: () => void } {
+export function uploadClip(batch: string, file: File, onProgress: (loaded: number, total: number) => void, uploadId?: string): { promise: Promise<UploadResult>; abort: () => void } {
   const xhr = new XMLHttpRequest()
   const promise = new Promise<UploadResult>((resolve, reject) => {
-    xhr.open("PUT", `/api/batches/${encodeURIComponent(batch)}/upload?filename=${encodeURIComponent(file.name)}`)
+    const query = new URLSearchParams({ filename: file.name, expected_size: String(file.size) })
+    if (uploadId) query.set("upload_id", uploadId)
+    xhr.open("PUT", `/api/batches/${encodeURIComponent(batch)}/upload?${query}`)
     xhr.setRequestHeader("Content-Type", "application/octet-stream")
     xhr.upload.onprogress = (e) => onProgress(e.loaded, e.total || file.size)
     xhr.onload = () => {
-      if (xhr.status >= 200 && xhr.status < 300) resolve(JSON.parse(xhr.responseText))
+      if (xhr.status >= 200 && xhr.status < 300) {
+        try {
+          const result: UploadResult = JSON.parse(xhr.responseText)
+          if (typeof result.clip !== "string" || result.size !== file.size) throw new Error("上传结果不完整，请重试")
+          resolve(result)
+        } catch (error) {
+          reject(error instanceof SyntaxError ? new Error("服务器返回异常，请重试") : error)
+        }
+      }
       else {
         let msg = xhr.statusText
         try { msg = JSON.parse(xhr.responseText).detail || msg } catch { /* 保持原状态文字 */ }

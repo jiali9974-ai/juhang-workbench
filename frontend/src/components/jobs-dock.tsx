@@ -1,10 +1,12 @@
 import { useState } from "react"
-import { CheckCircle2, ChevronUp, CircleAlert, Loader2 } from "lucide-react"
+import { CheckCircle2, ChevronUp, CircleAlert, Loader2, RefreshCw } from "lucide-react"
 import { AnimatePresence, motion } from "motion/react"
 
 import { ease } from "@/components/motion"
 import { useTaskList } from "@/hooks/use-task-list"
 import { cn } from "@/lib/utils"
+import { uploadTasks } from "@/lib/upload-tasks"
+import { Button } from "@/components/ui/button"
 
 const STATE = { queued: "排队", running: "", done: "完成", error: "出错" } as const
 
@@ -12,9 +14,10 @@ export function JobsDock({ hideCompleted = false }: { hideCompleted?: boolean })
   const { jobs, active } = useTaskList()
   const [open, setOpen] = useState(false)
   const busy = active.length > 0
+  const failed = jobs.filter((job) => job.status === "error")
   return (
     <AnimatePresence>
-      {jobs.length > 0 && (!hideCompleted || busy) && (
+      {jobs.length > 0 && (!hideCompleted || busy || failed.length > 0) && (
         <motion.div
           layout
           initial={{ opacity: 0, y: 24, scale: 0.96 }}
@@ -26,10 +29,10 @@ export function JobsDock({ hideCompleted = false }: { hideCompleted?: boolean })
           <motion.button layout="position" className="flex w-full items-center gap-2.5 px-4 py-3 text-left text-[13px] hover:bg-muted/50" onClick={() => setOpen(!open)}>
             <AnimatePresence mode="wait" initial={false}>
               <motion.span key={busy ? "busy" : "idle"} initial={{ scale: 0.5, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} exit={{ scale: 0.5, opacity: 0 }}>
-                {busy ? <Loader2 className="size-4 animate-spin text-gold-ink" /> : <CheckCircle2 className="size-4 text-ok" />}
+                {busy ? <Loader2 className="size-4 animate-spin text-gold-ink" /> : failed.length ? <CircleAlert className="size-4 text-destructive" /> : <CheckCircle2 className="size-4 text-ok" />}
               </motion.span>
             </AnimatePresence>
-            <span className="flex-1 font-medium">{busy ? `${active.length} 个任务进行中` : "任务都完成了"}</span>
+            <span className="flex-1 font-medium">{busy ? `${active.length} 个任务进行中` : failed.length ? `${failed.length} 个任务失败` : "任务都完成了"}</span>
             {busy && !open && <span className="max-w-[120px] truncate text-xs text-muted-foreground">{active[0].message}</span>}
             <motion.span animate={{ rotate: open ? 180 : 0 }} transition={{ duration: 0.25, ease }}>
               <ChevronUp className="size-4 text-muted-foreground" />
@@ -52,7 +55,7 @@ export function JobsDock({ hideCompleted = false }: { hideCompleted?: boolean })
                 className="scrollbar-thin max-h-72 overflow-y-auto border-t"
               >
                 <AnimatePresence initial={false}>
-                  {[...active, ...jobs.filter((job) => job.status !== "running" && job.status !== "queued")].slice(0, Math.max(12, active.length)).map((j) => (
+                  {[...active, ...failed, ...jobs.filter((job) => job.status === "done")].slice(0, Math.max(12, active.length + failed.length)).map((j) => (
                     <motion.div
                       key={j.id}
                       layout
@@ -67,6 +70,9 @@ export function JobsDock({ hideCompleted = false }: { hideCompleted?: boolean })
                         <span className="text-xs text-muted-foreground tabular">
                           {j.kind === "request" ? "进行中" : j.status === "running" ? `${Math.round(j.progress * 100)}%` : STATE[j.status]}
                         </span>
+                        {j.kind === "upload" && j.status === "error" && (
+                          <Button size="sm" variant="ghost" className="h-6 gap-1 px-1.5" title={`重试${j.message}`} aria-label={`重试${j.title}`} onClick={() => uploadTasks.retry(j.id.slice("upload:".length))}><RefreshCw className="size-3" />重试</Button>
+                        )}
                       </div>
                       <div className={cn("mt-0.5 truncate text-xs", j.status === "error" ? "text-destructive" : "text-muted-foreground")}>
                         {j.status === "error" ? j.error.split("\n")[0] : j.message}

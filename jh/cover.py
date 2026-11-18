@@ -8,7 +8,7 @@
   （同一次拍摄、同一身衣服，比如两句话之间嘴闭着、看着镜头的瞬间）；
 - 做封面：按分数从高到低，一帧一帧在美颜调色后的高清画面上再检查一遍脸、再检查抠图（脸完整在人像里、人像大小正常），
   任何一项不合格就换下一帧重做，检查结果记在 cover_check.json；
-- 抠图只要人：用 BiRefNet-portrait 人像抠图（头发细节好；没有这个模型时退回 mediapipe），
+- 抠图只要人：只使用 BiRefNet-portrait 人像抠图（含头发细节），不可用时明确报错，
   下巴以上不限制，下巴以下只保留身体骨架范围（躯干、手臂、手）里面的部分，手里拿的表盒、桌面这些人以外的东西都不抠。
 """
 from __future__ import annotations
@@ -65,10 +65,8 @@ def _model(name: str):
 
         if name == "mesh":
             _models[name] = mp.solutions.face_mesh.FaceMesh(static_image_mode=True, max_num_faces=1, min_detection_confidence=0.5)
-        elif name == "selfie":
-            _models[name] = mp.solutions.selfie_segmentation.SelfieSegmentation(model_selection=0)
         elif name == "pose":
-            _models[name] = mp.solutions.pose.Pose(static_image_mode=True, model_complexity=1, enable_segmentation=True)
+            _models[name] = mp.solutions.pose.Pose(static_image_mode=True, model_complexity=1, enable_segmentation=False)
         elif name == "hands":
             _models[name] = mp.solutions.hands.Hands(static_image_mode=True, max_num_hands=2, model_complexity=1,
                                                      min_detection_confidence=0.4)
@@ -228,38 +226,33 @@ def _body_region(h: int, w: int, pose_lm, hands_lm, oval: np.ndarray | None, hea
     return cv2.dilate(reg, cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (2 * k_ + 1, 2 * k_ + 1)))
 
 
-_bire = None                                          # BiRefNet 模型（加载失败为 False）
-_bire_err = ""
+_bire = None                                          # 只缓存成功加载的 BiRefNet 模型
 
 
 def _birefnet():
     """BiRefNet-portrait 人像抠图模型（MIT 许可，可商用；权重在 data/models/BiRefNet-portrait，GPU 半精度，约 1.7GB 显存）。
-    第一次用要加载并预热十几秒，之后一张约 0.2 秒。没有模型、没有显卡或加载失败返回 None（退回 mediapipe 分割）。"""
-    global _bire, _bire_err
+    没有模型、没有显卡或加载失败时明确报错；不切换到其他抠图模型。"""
+    global _bire
     if _bire is None:
-        _bire = False
+        d = config.data_root() / (_cfg().get("matting_model") or "models/BiRefNet-portrait")
+        if not (d / "model.safetensors").is_file():
+            raise RuntimeError(f"BiRefNet-portrait 抠图模型缺少权重：{d}")
         try:
             import torch
             from transformers import AutoModelForImageSegmentation
 
-            d = config.data_root() / (_cfg().get("matting_model") or "models/BiRefNet-portrait")
-            if not (d / "model.safetensors").exists():
-                _bire_err = f"没有模型文件：{d}"
-            elif not torch.cuda.is_available():
-                _bire_err = "没有可用的显卡"
-            else:
-                m = AutoModelForImageSegmentation.from_pretrained(str(d), trust_remote_code=True)
-                _bire = m.to("cuda").eval().half()
+            if not torch.cuda.is_available():
+                raise RuntimeError("没有可用的 NVIDIA GPU，请在带卡模式下生成封面")
+            m = AutoModelForImageSegmentation.from_pretrained(str(d), trust_remote_code=True, local_files_only=True)
+            _bire = m.to("cuda").eval().half()
         except Exception as e:  # noqa: BLE001
-            _bire_err = repr(e)[:300]
-    return _bire or None
+            raise RuntimeError(f"BiRefNet-portrait 抠图模型加载失败：{e}") from e
+    return _bire
 
 
-def _alpha_birefnet(img: np.ndarray) -> np.ndarray | None:
+def _alpha_birefnet(img: np.ndarray) -> np.ndarray:
     """BiRefNet 抠图：整张图缩到 1024×1024 推理，输出 0–1 的透明度（头发边缘是半透明的），再放回原尺寸。"""
     m = _birefnet()
-    if m is None:
-        return None
     import torch
 
     h, w = img.shape[:2]
@@ -273,25 +266,18 @@ def _alpha_birefnet(img: np.ndarray) -> np.ndarray | None:
 
 
 def _person_mask(img: np.ndarray, oval: list | None = None) -> tuple[np.ndarray, dict]:
-    """只抠人。抠图用 BiRefNet-portrait（头发细节好）；没有这个模型时退回 mediapipe 的人像分割。
+    """只使用 BiRefNet-portrait 抠人（包括头发细节），模型不可用时停止并报错。
     再用身体骨架范围限制：下巴以上不限制（保住头发），下巴以下只留身体、手臂、手——手里拿的表盒、桌面这些去掉；
     最后只留脸所在的那一块。返回 0–1 的透明度遮罩（全尺寸）和检查结果。"""
+    alpha = _alpha_birefnet(img)
     h, w = img.shape[:2]
     sw_, sh_ = 512, int(512 * h / w)
     small = cv2.resize(img, (sw_, sh_))
     rgb = cv2.cvtColor(small, cv2.COLOR_BGR2RGB)
     pr = _model("pose").process(rgb)
     hr = _model("hands").process(rgb)
-    alpha = _alpha_birefnet(img)
-    used = "birefnet-portrait"
-    if alpha is None:
-        used = "mediapipe"
-        m = _model("selfie").process(rgb).segmentation_mask
-        if pr.segmentation_mask is not None:
-            m = np.maximum(m, pr.segmentation_mask)
-        alpha = cv2.resize(m, (w, h), interpolation=cv2.INTER_LINEAR)
     ov = np.array(oval, np.float32) * (sw_ / w) if oval is not None else None
-    region = _body_region(sh_, sw_, pr.pose_landmarks, hr.multi_hand_landmarks, ov, head_free=used != "mediapipe")
+    region = _body_region(sh_, sw_, pr.pose_landmarks, hr.multi_hand_landmarks, ov, head_free=True)
     a_small = cv2.resize(alpha, (sw_, sh_), interpolation=cv2.INTER_AREA)
     hard = ((a_small > 0.5) & (region > 0)).astype(np.uint8)
     n, lab, stats, _ = cv2.connectedComponentsWithStats(hard, 8)
@@ -308,9 +294,7 @@ def _person_mask(img: np.ndarray, oval: list | None = None) -> tuple[np.ndarray,
     gate = cv2.GaussianBlur(gate, (0, 0), 2.0)
     soft = np.clip(alpha * gate, 0, 1).astype(np.float32)
     info = {"area": round(float((soft > 0.5).mean()), 3), "pose": pr.pose_landmarks is not None,
-            "hands": len(hr.multi_hand_landmarks or []), "model": used}
-    if used == "mediapipe" and _bire_err:
-        info["model_note"] = _bire_err
+            "hands": len(hr.multi_hand_landmarks or []), "model": "birefnet-portrait"}
     if oval is not None:
         face = np.zeros((h, w), np.uint8)
         cv2.fillPoly(face, [np.array(oval, np.int32)], 1)
@@ -454,6 +438,7 @@ def make_best_cover(segs, lines: list[str], out_png: Path, *, settings: dict | N
     不合格就换下一帧重做（同一条素材 0.4 秒内只试一次）。都不合格时用问题最少的那一次。检查记录写在 cover_check.json。"""
     import json
 
+    _birefnet()                                      # 抠图模型不可用时先报错，不扫描素材后再降级
     r = config.load()["render"]
     W, H = r["width"], r["height"]
     settings = look.current() if settings is None else settings

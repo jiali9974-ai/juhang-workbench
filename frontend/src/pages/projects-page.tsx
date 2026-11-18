@@ -1,6 +1,6 @@
 // 项目页：左边是全部项目（文字），右边是选中项目的成片视频或素材缩略图。
 import { useCallback, useEffect, useState } from "react"
-import { FolderOpen, Loader2, Settings2, Sparkles } from "lucide-react"
+import { FolderOpen, Loader2, Settings2, Sparkles, UploadCloud } from "lucide-react"
 import { toast } from "sonner"
 
 import { DeleteProject } from "@/components/delete-project"
@@ -125,6 +125,9 @@ export function ProjectsPage() {
             </Button>
             <Button size="sm" variant="outline" className="rounded-full" onClick={() => go({ page: "batch", batch: b.batch, tab: b.clips ? "scripts" : "clips" })}>
               <Settings2 />素材与脚本
+            </Button>
+            <Button size="sm" variant="outline" className="rounded-full" onClick={() => go({ page: "batch", batch: b.batch, tab: "clips" })}>
+              <UploadCloud />补传素材
             </Button>
             <DeleteProject kind="batch" id={b.batch} name={b.batch} size="default" className="h-7 rounded-full px-2.5 text-[0.8rem]" />
           </div>

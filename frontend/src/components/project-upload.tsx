@@ -91,7 +91,7 @@ export function ProjectUpload({ onCreated, onUploaded }: {
         element?.setAttribute("directory", "")
       }} type="file" multiple className="hidden"
         onChange={(event) => { const files = Array.from(event.target.files ?? []); event.target.value = ""; if (files.length) addFiles(files, folderOf(files)) }} />
-      <UploadList items={queue.items} onCancel={queue.cancel} onClear={queue.clearDone} maxVisibleItems={3} />
+      <UploadList items={queue.items} onCancel={queue.cancel} onClear={queue.clearDone} onRetry={queue.retry} onRetryFailed={queue.retryFailed} maxVisibleItems={3} />
     </div>
   )
 }
