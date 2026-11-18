@@ -14,7 +14,6 @@
 from __future__ import annotations
 
 import json
-import subprocess
 import threading
 from functools import lru_cache
 from pathlib import Path
@@ -22,7 +21,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from . import config
+from . import cancellation, config
 
 W, H = 540, 960                         # 测光用的画面大小（够看清脸，速度快）
 FRAMES = 10                             # 每条素材均匀取多少帧测光
@@ -47,7 +46,7 @@ def _framing(zoom: float) -> str:
 
 def grab(clip: Path, t: float, zoom: float = 1.0) -> np.ndarray | None:
     """取一帧 RGB（裁成成片的构图，缩小到 540×960）。"""
-    r = subprocess.run([config.ffmpeg(), "-hide_banner", "-loglevel", "error", "-ss", f"{max(0.0, t):.3f}",
+    r = cancellation.run_process([config.ffmpeg(), "-hide_banner", "-loglevel", "error", "-ss", f"{max(0.0, t):.3f}",
                         "-i", str(clip), "-frames:v", "1", "-vf", _framing(zoom), "-f", "rawvideo",
                         "-pix_fmt", "rgb24", "-"], capture_output=True)
     if len(r.stdout) != W * H * 3:

@@ -10,6 +10,7 @@ interface JobsCtx {
   active: Job[]
   /** 跟踪一个任务，完成时回调；出错会自动弹提示 */
   watch: (job: Job, onDone?: Callback) => void
+  cancel: (id: string) => Promise<void>
   /** 任意任务结束时自增，页面用它来刷新数据 */
   version: number
 }
@@ -39,7 +40,7 @@ export function JobsProvider({ children }: { children: ReactNode }) {
       setJobs((previous) => [...list, ...previous.filter((job) => !returned.has(job.id) && Date.now() - (optimistic.current.get(job.id) ?? 0) < 10000)])
       let finishedNow = false
       for (const j of list) {
-        const over = j.status === "done" || j.status === "error"
+        const over = j.status === "done" || j.status === "error" || j.status === "cancelled"
         if (over && !seenFinished.current.has(j.id)) {
           seenFinished.current.add(j.id)
           finishedNow = initialized.current || callbacks.current.has(j.id) || finishedNow
@@ -49,7 +50,7 @@ export function JobsProvider({ children }: { children: ReactNode }) {
             if (j.status === "done") {
               try { cb?.(j) } catch { /* 不让页面回调影响其余任务的轮询。 */ }
             }
-            else toast.error(`${j.title} 出错`, { description: j.error.split("\n")[0] })
+            else if (j.status === "error") toast.error(`${j.title} 出错`, { description: j.error.split("\n")[0] })
           }
         }
       }
@@ -82,7 +83,14 @@ export function JobsProvider({ children }: { children: ReactNode }) {
   }, [poll])
 
   const active = jobs.filter((j) => j.status === "queued" || j.status === "running")
-  return <Ctx.Provider value={{ jobs, active, watch, version }}>{children}</Ctx.Provider>
+  const cancel = useCallback(async (id: string) => {
+    const job = await api.cancelJob(id)
+    // 先等已发出的轮询结束，避免旧响应把“正在取消”覆盖回运行中。
+    await polling.current
+    setJobs((previous) => previous.map((item) => item.id === id ? job : item))
+    await poll()
+  }, [poll])
+  return <Ctx.Provider value={{ jobs, active, watch, cancel, version }}>{children}</Ctx.Provider>
 }
 
 export function useJobs() {

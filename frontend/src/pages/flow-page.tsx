@@ -6,6 +6,7 @@ import { toast } from "sonner"
 
 import { ease } from "@/components/motion"
 import { useJobs } from "@/hooks/use-jobs"
+import { CancelTaskButton } from "@/components/cancel-task-button"
 import { go } from "@/hooks/use-route"
 import { jobOf } from "@/lib/current"
 import { CLIP_JOBS, pipelineStage } from "@/lib/pipeline-status"
@@ -280,9 +281,15 @@ export function FlowPage({ batch, jobId }: { batch?: string; jobId?: string }) {
       )}
 
       {job && (
-        <div role="progressbar" aria-label="生成进度" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(job.progress * 100)} className="mt-8 h-1.5 overflow-hidden rounded-full bg-muted">
+        <div className="mt-8">
+          <div className="mb-2 flex items-center justify-between gap-3 text-sm">
+            <span className="min-w-0 truncate" role="status">{job.message}</span>
+            <CancelTaskButton job={job} />
+          </div>
+        <div role="progressbar" aria-label="生成进度" aria-valuemin={0} aria-valuemax={100} aria-valuenow={Math.round(job.progress * 100)} className="h-1.5 overflow-hidden rounded-full bg-muted">
           <motion.div className={cn("h-full rounded-full bg-emerald-500", job.status === "error" && "bg-destructive")} initial={false} animate={{ width: `${Math.round(job.progress * 100)}%` }} transition={{ duration: 0.4, ease }} />
           <span className="sr-only" aria-live="polite">{job.message}</span>
+        </div>
         </div>
       )}
 
@@ -291,7 +298,7 @@ export function FlowPage({ batch, jobId }: { batch?: string; jobId?: string }) {
           {steps.map((s, i) => (
             <li key={s.id} className="relative min-w-0 flex-1">
               <StepCard id={s.id} index={i} step={s} open={open === s.id}
-                state={stage === s.id ? job?.status === "error" ? "error" : "running" : completed.has(s.id) ? "done" : "idle"}
+                state={stage === s.id ? job?.status === "error" ? "error" : job?.status === "cancelled" ? "idle" : "running" : completed.has(s.id) ? "done" : "idle"}
                 onToggle={() => setOpen((o) => (o === s.id ? null : s.id))} />
               {i < steps.length - 1 && <ArrowRight aria-hidden="true" className="absolute top-20 -right-6 size-4 -translate-y-1/2 text-muted-foreground/50" />}
             </li>

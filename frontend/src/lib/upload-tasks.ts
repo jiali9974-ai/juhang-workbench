@@ -6,7 +6,7 @@ export interface UploadItem {
   batch: string
   file: File
   loaded: number
-  status: "queued" | "uploading" | "done" | "error"
+  status: "queued" | "uploading" | "done" | "error" | "cancelled"
   error?: string
   speed?: number
   created: number
@@ -80,20 +80,24 @@ export class UploadTaskStore {
       while (this.pending.length) {
         const key = this.pending.shift()!
         const item = this.items.find((row) => row.key === key)
-        if (!item) continue
+        if (!item || item.status !== "queued") continue
         this.patch(key, { status: "uploading" })
         const started = performance.now()
         try {
           const transfer = this.transport(item.batch, item.file, (loaded) => {
+            if (this.items.find((row) => row.key === key)?.status !== "uploading") return
             const seconds = (performance.now() - started) / 1000
             this.patch(key, { loaded, speed: seconds > 0.5 ? loaded / seconds : undefined })
           }, item.key)
           this.current = { key, abort: transfer.abort }
           await transfer.promise
+          if (this.items.find((row) => row.key === key)?.status !== "uploading") continue
           this.patch(key, { loaded: item.file.size, status: "done" })
           this.onUploaded(item)
         } catch (error) {
-          this.patch(key, { status: "error", error: String(error).replace(/^Error: /, "") })
+          if (this.items.find((row) => row.key === key)?.status === "uploading") {
+            this.patch(key, { status: "error", error: String(error).replace(/^Error: /, "") })
+          }
         } finally {
           this.current = null
         }
@@ -105,11 +109,10 @@ export class UploadTaskStore {
 
   cancel(key: string) {
     const item = this.items.find((row) => row.key === key)
-    if (!item) return
+    if (!item || (item.status !== "queued" && item.status !== "uploading")) return
     this.pending = this.pending.filter((pending) => pending !== key)
-    this.items = this.items.filter((row) => row.key !== key)
+    this.patch(key, { status: "cancelled", speed: undefined, error: undefined })
     if (this.current?.key === key) this.current.abort()
-    this.publish(item.scope)
   }
   retry(key: string) {
     const item = this.items.find((row) => row.key === key)
@@ -123,12 +126,12 @@ export class UploadTaskStore {
     return keys.reduce((count, key) => count + Number(this.retry(key)), 0)
   }
   clearDone(scope: string) {
-    this.items = this.items.filter((row) => row.scope !== scope || row.status !== "done")
+    this.items = this.items.filter((row) => row.scope !== scope || !["done", "cancelled"].includes(row.status))
     this.publish(scope)
   }
   clearBatchDone(batch: string) {
-    const scopes = new Set(this.items.filter((item) => item.batch === batch && item.status === "done").map((item) => item.scope))
-    this.items = this.items.filter((item) => item.batch !== batch || item.status !== "done")
+    const scopes = new Set(this.items.filter((item) => item.batch === batch && ["done", "cancelled"].includes(item.status)).map((item) => item.scope))
+    this.items = this.items.filter((item) => item.batch !== batch || !["done", "cancelled"].includes(item.status))
     scopes.forEach((scope) => this.publish(scope))
   }
   reset(scope: string) {

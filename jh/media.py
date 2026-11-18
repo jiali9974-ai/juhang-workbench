@@ -1,13 +1,13 @@
 """素材探测与 ffmpeg 小工具。"""
 from __future__ import annotations
 
-import subprocess
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
 import av
 
-from . import config
+from . import cancellation, config
 
 VIDEO_EXTS = {".mov", ".mp4", ".m4v"}
 
@@ -39,7 +39,7 @@ def probe(path: Path) -> ClipInfo:
 
 
 def _rotation_via_ffmpeg(path: Path) -> int:
-    out = subprocess.run([config.ffmpeg(), "-hide_banner", "-i", str(path)],
+    out = cancellation.run_process([config.ffmpeg(), "-hide_banner", "-i", str(path)],
                          capture_output=True, text=True, encoding="utf-8", errors="ignore").stderr
     for line in out.splitlines():
         if "rotation of" in line:
@@ -55,10 +55,16 @@ def list_clips(folder: Path) -> list[Path]:
 
 
 def run_ffmpeg(args: list[str]) -> None:
-    cmd = [config.ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", *args]
-    r = subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", errors="ignore")
-    if r.returncode != 0:
-        raise RuntimeError(f"ffmpeg 失败: {' '.join(cmd)}\n{r.stderr[-2000:]}")
+    # 完整写入后才替换目标，取消或失败不会留下可被缓存误用的半个文件。
+    target = Path(args[-1])
+    with tempfile.TemporaryDirectory(prefix=".ffmpeg-", dir=target.parent) as temporary:
+        output = Path(temporary) / target.name
+        cmd = [config.ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", *args[:-1], str(output)]
+        r = cancellation.run_process(cmd, capture_output=True, text=True, encoding="utf-8", errors="ignore")
+        if r.returncode != 0:
+            raise RuntimeError(f"ffmpeg 失败: {' '.join(cmd)}\n{r.stderr[-2000:]}")
+        cancellation.check()
+        output.replace(target)
 
 
 def extract_audio_16k(src: Path, dst: Path) -> Path:

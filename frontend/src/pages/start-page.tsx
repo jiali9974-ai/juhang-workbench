@@ -179,6 +179,7 @@ export function StartPage() {
                     {queue.busy ? `上传中 ${done}/${queue.items.length}` : `已上传 ${done} 个视频`}
                   </span>
                   <span className="text-xs text-muted-foreground tabular">
+                    {queue.busy && <button className="mr-3 hover:text-foreground hover:underline" onClick={queue.cancelAll}>取消全部上传</button>}
                     {queue.items.some((item) => item.status === "error") && (
                       <button className="mr-3 text-gold-ink hover:underline" onClick={queue.retryFailed}>重试失败项</button>
                     )}
@@ -204,11 +205,12 @@ export function StartPage() {
                         <span className="min-w-0 flex-1 truncate" title={`${it.file.name} · 项目：${it.batch}`}>{it.file.name}</span>
                         <span title={it.error} className={cn("max-w-[40%] shrink-0 truncate text-xs tabular", it.status === "error" ? "text-destructive" : "text-muted-foreground")}>
                           {it.status === "error" ? it.error
+                            : it.status === "cancelled" ? "已取消"
                             : it.status === "uploading" ? `${Math.round((it.loaded / (it.file.size || 1)) * 100)}%`
                             : it.status === "queued" ? "排队" : fmtSize(it.file.size)}
                         </span>
                         {(it.status === "queued" || it.status === "uploading") && (
-                          <button title="取消" onClick={() => queue.cancel(it.key)} className="text-muted-foreground hover:text-foreground"><X className="size-3.5" /></button>
+                          <Button size="sm" variant="ghost" className="h-6 gap-1 px-1.5" title={`取消上传 ${it.file.name}`} aria-label={`取消上传 ${it.file.name}`} onClick={() => queue.cancel(it.key)}><X className="size-3" />取消</Button>
                         )}
                         {it.status === "error" && (
                           <Button size="sm" variant="ghost" className="h-6 gap-1 px-1.5" title={`重新上传到「${it.batch}」`} aria-label={`重试上传 ${it.file.name} 到项目 ${it.batch}`} onClick={() => queue.retry(it.key)}><RefreshCw className="size-3" />重试</Button>

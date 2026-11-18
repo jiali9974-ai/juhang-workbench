@@ -13,14 +13,13 @@
 """
 from __future__ import annotations
 
-import subprocess
 from pathlib import Path
 
 import cv2
 import numpy as np
 from PIL import Image, ImageDraw, ImageFont
 
-from . import config, look
+from . import cancellation, config, look
 
 
 def _cfg() -> dict:
@@ -47,7 +46,7 @@ def _grab(clip: Path, t: float, zoom: float, W: int, H: int, settings: dict | No
 
         png = skin.still(decode, encode, W, H, effects["smooth"])
     else:
-        r = subprocess.run([config.ffmpeg(), "-hide_banner", "-loglevel", "error",
+        r = cancellation.run_process([config.ffmpeg(), "-hide_banner", "-loglevel", "error",
                             *decode, "-frames:v", "1", *encode], capture_output=True)
         png = r.stdout
     if not png:
@@ -392,10 +391,11 @@ def _scan(clip: Path, start: float, dur: float, zoom: float, step: float, skip: 
     w, h = 540, 960
     z = max(1.0, float(zoom or 1.0))
     vf = f"crop='min(iw,ih*{w}/{h})/{z}':'min(ih,iw*{h}/{w})/{z}',scale={w}:{h}:flags=area,fps={1 / step:.4f}"
-    r = subprocess.run([config.ffmpeg(), "-hide_banner", "-loglevel", "error", "-ss", f"{start:.3f}", "-t", f"{dur:.3f}",
+    r = cancellation.run_process([config.ffmpeg(), "-hide_banner", "-loglevel", "error", "-ss", f"{start:.3f}", "-t", f"{dur:.3f}",
                         "-i", str(clip), "-vf", vf, "-f", "rawvideo", "-pix_fmt", "bgr24", "-"], capture_output=True)
     out = []
     for i in range(len(r.stdout) // (w * h * 3)):
+        cancellation.check()
         t = round(start + i * step, 3)
         if t > start + dur - 0.3 or any(a - 0.1 <= t <= b + 0.1 for a, b in skip):
             continue                                    # 最后 0.3 秒不要（太靠近结尾，做封面时可能取不到这一帧）
@@ -449,6 +449,7 @@ def make_best_cover(segs, lines: list[str], out_png: Path, *, settings: dict | N
     log["passed_first_check"] = sum(1 for x in ranked if x[0])
     tried = []                                          # (问题数, -分数, 画面, 遮罩, 记录)
     for _, sc, m in ranked:
+        cancellation.check()
         if len(tried) >= max_tries:
             break
         if any(e["clip"] == Path(m["clip"]).name and abs(e["t"] - m["t"]) < 0.4 for *_, e in tried):

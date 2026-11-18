@@ -9,13 +9,13 @@ from pathlib import Path
 import numpy as np
 import soundfile as sf
 
-from . import config
+from . import cancellation, config
 
 SR = 48000
 
 
 def _ff(args: list[str]) -> subprocess.CompletedProcess:
-    return subprocess.run([config.ffmpeg(), "-hide_banner", "-y", *args], capture_output=True, text=True,
+    return cancellation.run_process([config.ffmpeg(), "-hide_banner", "-y", *args], capture_output=True, text=True,
                           encoding="utf-8", errors="ignore")
 
 
@@ -37,7 +37,7 @@ def loudnorm_2pass(src: Path, dst: Path, target_i: float = -16.0, tp: float = -1
 
 
 def load(path: Path, channels: int = 1, sr: int = SR) -> np.ndarray:
-    r = subprocess.run([config.ffmpeg(), "-hide_banner", "-loglevel", "error", "-i", str(path), "-ac", str(channels),
+    r = cancellation.run_process([config.ffmpeg(), "-hide_banner", "-loglevel", "error", "-i", str(path), "-ac", str(channels),
                         "-ar", str(sr), "-f", "f32le", "-"], capture_output=True)
     if r.returncode:
         raise RuntimeError(r.stderr.decode("utf-8", "ignore")[-500:])

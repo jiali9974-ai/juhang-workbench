@@ -19,7 +19,7 @@ from pathlib import Path
 import numpy as np
 import soundfile as sf
 
-from . import config, media
+from . import cancellation, config, media
 
 LANG_TAGS = {"yue", "zh", "en", "ja", "ko", "nospeech"}
 PUNCT = "，。？！、,.?!；;：:"
@@ -68,6 +68,7 @@ def _split_sentences(words: list[str], ts: list[list[int]], offset: float, lang:
 
 
 def transcribe_clip(clip: Path, out_dir: Path) -> dict:
+    cancellation.check()
     out_json = out_dir / f"{clip.stem}.json"
     if out_json.exists():
         old = json.loads(out_json.read_text(encoding="utf-8"))
@@ -82,6 +83,7 @@ def transcribe_clip(clip: Path, out_dir: Path) -> dict:
     segs = vad.generate(input=audio, fs=sr)[0]["value"]  # [[start_ms, end_ms], ...]，直接传数组，不依赖系统 ffmpeg
     sentences = []
     for s_ms, e_ms in segs:
+        cancellation.check()
         chunk = audio[int(s_ms * sr / 1000): int(e_ms * sr / 1000)]
         if len(chunk) < sr * 0.3:
             continue
@@ -107,6 +109,7 @@ def transcribe_clip(clip: Path, out_dir: Path) -> dict:
         "sentences": sentences,
     }
     out_dir.mkdir(parents=True, exist_ok=True)
+    cancellation.check()
     out_json.write_text(json.dumps(result, ensure_ascii=False, indent=1), encoding="utf-8")
     return result
 

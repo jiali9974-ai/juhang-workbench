@@ -36,12 +36,13 @@ export function useUploadQueue(batch: string, onUploaded: () => void, context?: 
     toast(`开始上传 ${good.length} 个视频`, { description: `共 ${fmtSize(good.reduce((sum, file) => sum + file.size, 0))}` })
   }, [batch, scope])
   const cancel = useCallback((key: string) => uploadTasks.cancel(key), [])
+  const cancelAll = useCallback(() => getSnapshot().items.forEach((item) => uploadTasks.cancel(item.key)), [getSnapshot])
   const retry = useCallback((key: string) => uploadTasks.retry(key), [])
   const retryFailed = useCallback(() => uploadTasks.retryFailed(getSnapshot().items.map((item) => item.key)), [getSnapshot])
   const clearDone = useCallback(() => !context && batch ? uploadTasks.clearBatchDone(batch) : uploadTasks.clearDone(scope), [batch, context, scope])
   const reset = useCallback(() => uploadTasks.reset(scope), [scope])
   const busy = snapshot.items.some((item) => item.status === "queued" || item.status === "uploading")
-  return { items: snapshot.items, batch: snapshot.batch || batch || null, add, cancel, retry, retryFailed, clearDone, reset, busy }
+  return { items: snapshot.items, batch: snapshot.batch || batch || null, add, cancel, cancelAll, retry, retryFailed, clearDone, reset, busy }
 }
 
 export function useAllUploads() { return useSyncExternalStore(uploadTasks.subscribe, uploadTasks.getAll, uploadTasks.getAll) }
@@ -83,6 +84,8 @@ export function UploadList({ items, onCancel, onClear, onRetry, onRetryFailed, m
 }) {
   if (!items.length) return null
   const done = items.filter((x) => x.status === "done").length
+  const cancelled = items.filter((x) => x.status === "cancelled").length
+  const active = items.filter((x) => x.status === "queued" || x.status === "uploading")
   const failed = items.filter((x) => x.status === "error").length
   return (
     <div className="soft-shadow mt-3 rounded-xl border bg-card">
@@ -91,7 +94,8 @@ export function UploadList({ items, onCancel, onClear, onRetry, onRetryFailed, m
         <span className="flex flex-wrap items-center justify-end gap-2 text-xs text-muted-foreground">
           {done}/{items.length} 完成
           {failed > 0 && <button className="text-gold-ink hover:underline" onClick={onRetryFailed}>重试失败项（{failed}）</button>}
-          {done > 0 && <button className="text-gold-ink hover:underline" onClick={onClear}>清除已完成</button>}
+          {active.length > 0 && <button className="text-muted-foreground hover:text-foreground hover:underline" onClick={() => active.forEach((item) => onCancel(item.key))}>取消全部上传</button>}
+          {done + cancelled > 0 && <button className="text-gold-ink hover:underline" onClick={onClear}>清除已结束</button>}
         </span>
       </div>
       <div className="scrollbar-thin max-h-64 overflow-y-auto"
@@ -109,6 +113,7 @@ export function UploadList({ items, onCancel, onClear, onRetry, onRetryFailed, m
                     <span className="truncate" title={`${it.file.name} · 项目：${it.batch}`}>{it.file.name}</span>
                     <span className="max-w-[45%] shrink-0 truncate text-xs text-muted-foreground tabular" title={it.error}>
                       {it.status === "error" ? <span className="text-destructive">{it.error}</span>
+                        : it.status === "cancelled" ? "已取消"
                         : it.status === "done" ? fmtSize(it.file.size)
                         : it.status === "queued" ? `排队 · ${fmtSize(it.file.size)}`
                         : `${pct.toFixed(0)}% · ${fmtSize(it.loaded)}/${fmtSize(it.file.size)}${it.speed ? ` · ${fmtSize(it.speed)}/s` : ""}`}
@@ -120,7 +125,7 @@ export function UploadList({ items, onCancel, onClear, onRetry, onRetryFailed, m
                   </div>
                 </div>
                 {(it.status === "queued" || it.status === "uploading") ? (
-                  <Button size="icon-xs" variant="ghost" title="取消" onClick={() => onCancel(it.key)}><X /></Button>
+                  <Button size="sm" variant="ghost" className="h-6 gap-1 px-1.5" title={`取消上传 ${it.file.name}`} aria-label={`取消上传 ${it.file.name}`} onClick={() => onCancel(it.key)}><X className="size-3" />取消</Button>
                 ) : it.status === "error" ? (
                   <Button size="sm" variant="ghost" className="h-6 gap-1 px-1.5" title={`重新上传到「${it.batch}」`} aria-label={`重试上传 ${it.file.name} 到项目 ${it.batch}`} onClick={() => onRetry(it.key)}><RefreshCw className="size-3" />重试</Button>
                 ) : <span className="size-6" />}

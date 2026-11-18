@@ -6,14 +6,14 @@ from __future__ import annotations
 
 import json
 import shutil
-import subprocess
+import tempfile
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 import cv2
 import numpy as np
 
-from . import config, look, media, script as scriptmod
+from . import cancellation, config, look, media, script as scriptmod
 
 PUNCT_STRIP = "，。,.！!？?、；;：: "
 
@@ -243,7 +243,7 @@ def has_face(clip: Path, t: float) -> bool:
     global _face
     if _face is None:
         _face = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
-    r = subprocess.run([config.ffmpeg(), "-hide_banner", "-loglevel", "error", "-ss", f"{t:.3f}", "-i", str(clip),
+    r = cancellation.run_process([config.ffmpeg(), "-hide_banner", "-loglevel", "error", "-ss", f"{t:.3f}", "-i", str(clip),
                         "-frames:v", "1", "-vf", "scale=540:-2", "-f", "image2pipe", "-vcodec", "png", "-"],
                        capture_output=True)
     if not r.stdout:
@@ -394,7 +394,7 @@ def _clip_audio(clip: Path, start: float | None = None, dur: float | None = None
     if start is not None:
         args += ["-ss", f"{start:.3f}", "-t", f"{dur:.3f}"]
     args += ["-i", str(clip), "-vn", "-ac", "2", "-ar", str(AUDIO_SR), "-f", "f32le", "-"]
-    r = subprocess.run(args, capture_output=True)
+    r = cancellation.run_process(args, capture_output=True)
     return np.frombuffer(r.stdout, dtype=np.float32).reshape(-1, 2).copy()
 
 
@@ -555,7 +555,7 @@ def face_spans(clip: Path, start: float, dur: float, step: float = 0.5) -> list[
     if _face is None:
         _face = cv2.CascadeClassifier(cv2.data.haarcascades + "haarcascade_frontalface_default.xml")
     w, h = 360, 640
-    r = subprocess.run([config.ffmpeg(), "-hide_banner", "-loglevel", "error", "-ss", f"{start:.3f}", "-t", f"{dur:.3f}",
+    r = cancellation.run_process([config.ffmpeg(), "-hide_banner", "-loglevel", "error", "-ss", f"{start:.3f}", "-t", f"{dur:.3f}",
                         "-i", str(clip), "-vf", f"fps={1 / step:.4f},scale={w}:{h}", "-f", "rawvideo", "-pix_fmt", "gray", "-"],
                        capture_output=True)
     frames = np.frombuffer(r.stdout, np.uint8)
@@ -693,17 +693,27 @@ def render(script: dict, progress=None, on_stage=None) -> Path:
         try:
             # 边做边检查：脸不自然、抠图不对就换一帧重做（见 cover.make_best_cover，记录在 cover_check.json）
             cover = covermod.make_best_cover(segs, script["cover"], work / "cover.png", settings=settings,
-                                             source_out=out_dir / f"{script['id']}_封面原图.jpg")
+                                             source_out=work / f"{script['id']}_封面原图.jpg")
             from PIL import Image as _Image                 # cv2.imread 不认中文路径，用 PIL 存 jpg
 
-            _Image.open(cover).convert("RGB").save(out_dir / f"{script['id']}_封面.jpg", quality=92)
+            _Image.open(cover).convert("RGB").save(work / f"{script['id']}_封面.jpg", quality=92)
         except Exception as e:  # noqa: BLE001
             (work / "cover_error.txt").write_text(repr(e), encoding="utf-8")
             raise RuntimeError(f"封面生成失败，已停止出片：{e}") from e
-    total = compose_segments(segs, work, out, progress, cover=cover, settings=settings, on_stage=on_stage)
-    cover_jpg = out_dir / f"{script['id']}_封面.jpg"
-    if cover and cover_jpg.exists():
-        embed_cover(out, cover_jpg)          # 文件自带封面：电脑文件夹、播放器、微信里看到的都是做好的封面
+    # 输出目录仅发布完整成片；取消重新生成时保留原来的成片。
+    with tempfile.TemporaryDirectory(prefix=".render-", dir=out_dir) as temporary:
+        pending = Path(temporary) / out.name
+        total = compose_segments(segs, work, pending, progress, cover=cover, settings=settings, on_stage=on_stage)
+        cover_jpg = work / f"{script['id']}_封面.jpg"
+        if cover and cover_jpg.exists():
+            embed_cover(pending, cover_jpg)
+        cancellation.check()
+        pending.replace(out)
+        if cover:
+            for suffix in ("_封面.jpg", "_封面原图.jpg", "_封面原图.json"):
+                image = work / f"{script['id']}{suffix}"
+                if image.exists():
+                    image.replace(out_dir / image.name)
 
     meta = {"script": script["id"], "duration": round(total, 2), "segments": len(segs),
             "output": str(out)}
@@ -769,7 +779,7 @@ def compose_segments(segs: list[Segment], work: Path, out: Path, progress=None,
         cmd = [cfg["paths"]["ffmpeg"], "-hide_banner", "-loglevel", "error", "-y", *inputs,
                "-filter_complex", filt, "-map", "[vout]", "-map", "1:a", "-t", f"{total:.3f}",
                *_venc(), "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", str(out.resolve())]
-        res = subprocess.run(cmd, cwd=work, capture_output=True, text=True, encoding="utf-8", errors="ignore")
+        res = cancellation.run_process(cmd, cwd=work, capture_output=True, text=True, encoding="utf-8", errors="ignore")
         if res.returncode != 0:
             raise RuntimeError(f"合成失败：{res.stderr[-2000:]}")
         return total
@@ -787,7 +797,7 @@ def compose_segments(segs: list[Segment], work: Path, out: Path, progress=None,
     cmd = [cfg["paths"]["ffmpeg"], "-hide_banner", "-loglevel", "error", "-y", *inputs,
            "-filter_complex", filt, "-map", "[vout]", "-map", "[aout]", "-t", f"{total:.3f}",
            *_venc(), "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", str(out.resolve())]
-    res = subprocess.run(cmd, cwd=work, capture_output=True, text=True, encoding="utf-8", errors="ignore")
+    res = cancellation.run_process(cmd, cwd=work, capture_output=True, text=True, encoding="utf-8", errors="ignore")
     if res.returncode != 0:
         raise RuntimeError(f"合成失败：{res.stderr[-2000:]}")
     return total

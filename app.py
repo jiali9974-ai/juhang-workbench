@@ -558,6 +558,14 @@ def job(jid: str):
     return j.to_dict()
 
 
+@app.post("/api/jobs/{jid}/cancel")
+def cancel_job(jid: str):
+    try:
+        return jobs.cancel(jid)
+    except KeyError:
+        raise HTTPException(404, "找不到任务")
+
+
 # ---------------- 直接删除项目 ----------------
 
 

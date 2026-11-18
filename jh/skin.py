@@ -10,7 +10,7 @@ import av
 import cv2
 import numpy as np
 
-from . import config, media
+from . import cancellation, config, media
 
 _FACE = [
     10, 338, 297, 332, 284, 251, 389, 356, 454, 323, 361, 288, 397, 365,
@@ -147,7 +147,7 @@ def _raw_input(width: int, height: int, fps: int) -> list[str]:
 
 
 def _read_frame(decode: list[str], width: int, height: int) -> bytearray:
-    raw = subprocess.run(_ffmpeg([*decode, "-frames:v", "1", *_raw_output()]), capture_output=True)
+    raw = cancellation.run_process(_ffmpeg([*decode, "-frames:v", "1", *_raw_output()]), capture_output=True)
     if raw.returncode or len(raw.stdout) != width * height * 3 // 2:
         raise RuntimeError("无法读取磨皮预览帧：" + raw.stderr.decode("utf-8", "replace")[-1000:])
     return bytearray(raw.stdout)
@@ -162,7 +162,7 @@ def still(decode: list[str], encode: list[str], width: int, height: int, strengt
             tracker.apply(frame, strength)
         finally:
             tracker.close()
-    result = subprocess.run(
+    result = cancellation.run_process(
         _ffmpeg([*_raw_input(width, height, 25), "-frames:v", "1", *encode]),
         input=frame, capture_output=True,
     )
@@ -198,6 +198,7 @@ def video(inputs: list[str], encoder: list[str], out: Path,
                     packed = np.frombuffer(frame, dtype=np.uint8)
                     try:
                         for picture in container.decode(stream):
+                            cancellation.check()
                             offset = 0
                             for plane in picture.planes:
                                 rows = np.frombuffer(plane, dtype=np.uint8).reshape(plane.height, plane.line_size)
@@ -205,9 +206,16 @@ def video(inputs: list[str], encoder: list[str], out: Path,
                                 packed[offset:end].reshape(plane.height, plane.width)[:] = rows[:, :plane.width]
                                 offset = end
                             tracker.apply(frame, strength)
+                            cancellation.check()
                             writer.stdin.write(frame)
                         writer.stdin.close()
-                        failed = writer.wait() != 0
+                        while writer.poll() is None:
+                            cancellation.check()
+                            try:
+                                writer.wait(timeout=0.2)
+                            except subprocess.TimeoutExpired:
+                                continue
+                        failed = writer.returncode != 0
                     except BrokenPipeError:
                         failed = True
                     finally:

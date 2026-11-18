@@ -79,6 +79,55 @@ test("某个文件上传失败后仍继续后续文件", async () => {
   assert.deepEqual(store.getSnapshot("scope").items.map((item) => item.status), ["error", "done"])
 })
 
+test("取消正在上传的文件会中断传输，保留取消状态，并继续后续项目", async () => {
+  const calls: { batch: string; transfer: ReturnType<typeof deferred<{ clip: string; size: number }>> }[] = []
+  const completed: string[] = []
+  let aborted = 0
+  const store = new UploadTaskStore((batch) => {
+    const transfer = deferred<{ clip: string; size: number }>()
+    calls.push({ batch, transfer })
+    return { promise: transfer.promise, abort: () => { aborted++; transfer.reject(new Error("已取消")) } }
+  }, (item) => completed.push(item.file.name))
+  store.add("one", "项目甲", [new File(["a"], "a.mp4"), new File(["b"], "b.mp4")])
+  store.add("two", "项目乙", [new File(["c"], "c.mp4")])
+  const [current, queued] = store.getSnapshot("one").items
+  store.cancel(current.key)
+  store.cancel(queued.key)
+  store.cancel(current.key) // 重复点击不重复中断。
+  await setImmediate()
+  assert.equal(aborted, 1)
+  assert.deepEqual(store.getSnapshot("one").items.map((item) => item.status), ["cancelled", "cancelled"])
+  assert.equal(store.getSnapshot("one").items[0].error, undefined)
+  assert.deepEqual(calls.map((call) => call.batch), ["项目甲", "项目乙"])
+  calls[1].transfer.resolve({ clip: "c.mp4", size: 1 })
+  await setImmediate()
+  assert.deepEqual(completed, ["c.mp4"])
+  store.cancel(store.getSnapshot("two").items[0].key)
+  assert.equal(store.getSnapshot("two").items[0].status, "done")
+  store.clearBatchDone("项目甲")
+  assert.equal(store.getSnapshot("one").items.length, 0)
+  assert.equal(store.getSnapshot("two").items.length, 1)
+})
+
+test("取消后迟到的进度与成功响应不会覆盖状态，也不会回调上传成功", async () => {
+  const transfer = deferred<{ clip: string; size: number }>()
+  let progress!: (loaded: number, total: number) => void
+  let completed = 0
+  const store = new UploadTaskStore((_batch, _file, onProgress) => {
+    progress = onProgress
+    return { promise: transfer.promise, abort: () => {} }
+  }, () => completed++)
+  store.add("scope", "项目", [new File(["aaaa"], "a.mp4")])
+  const key = store.getAll()[0].key
+  store.cancel(key)
+  progress(4, 4)
+  transfer.resolve({ clip: "a.mp4", size: 4 })
+  await setImmediate()
+  assert.equal(store.getAll()[0].status, "cancelled")
+  assert.equal(store.getAll()[0].loaded, 0)
+  assert.equal(completed, 0)
+})
+
 test("失败项在切到另一个项目后仍重传到原项目，并保留上传编号防止重复", async () => {
   const calls: { batch: string; file: File; id?: string; transfer: ReturnType<typeof deferred<{ clip: string; size: number }>> }[] = []
   const uploaded: string[] = []

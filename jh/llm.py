@@ -6,9 +6,7 @@
 """
 from __future__ import annotations
 
-import time
-
-from . import config
+from . import cancellation, config
 
 _TRANSIENT = ("502", "503", "504", "429", "timeout", "timed out", "temporarily", "overloaded",
               "connection", "upstream", "rate limit")
@@ -42,8 +40,10 @@ def chat(messages: list[dict], *, json_mode: bool = False, temperature: float | 
         if json_mode and config.load()["llm"].get("json_response_format", False):
             kw["response_format"] = {"type": "json_object"}
         for attempt in range(attempts_per_model):
+            cancellation.check()
             try:
                 r = client.chat.completions.create(model=model, messages=messages, **kw)
+                cancellation.check()
                 text = r.choices[0].message.content or ""
                 if text.strip():
                     return text
@@ -66,5 +66,5 @@ def chat(messages: list[dict], *, json_mode: bool = False, temperature: float | 
                     break                        # 这个模型用不了，直接换下一个
                 if not any(t in low for t in _TRANSIENT):
                     raise                        # Key 错误、内容违规等，重试也没用
-            time.sleep(min(30, 3 * (2 ** attempt)))   # 3、6、12、24 秒
+            cancellation.wait(min(30, 3 * (2 ** attempt)))   # 3、6、12、24 秒
     raise RuntimeError(f"大模型暂时连不上（已重试并换过备用模型）：{last}")

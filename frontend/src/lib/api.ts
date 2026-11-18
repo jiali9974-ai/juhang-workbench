@@ -63,7 +63,8 @@ export interface Job {
   id: string
   kind: string
   title: string
-  status: "queued" | "running" | "done" | "error"
+  status: "queued" | "running" | "done" | "error" | "cancelled"
+  cancel_requested?: boolean
   progress: number
   message: string
   stage?: string | null
@@ -101,11 +102,14 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     const r = await fetch(path, { headers: { "Content-Type": "application/json" }, ...init })
     if (!r.ok) {
       const body = await r.json().catch(() => ({}))
-      throw new ApiError(r.status, body.detail || r.statusText)
+      const message = path.endsWith("/cancel") && (r.status === 405 || (r.status === 404 && body.detail === "Not Found"))
+        ? "当前服务尚不支持取消任务，请在空闲时重启本地工作台后再试"
+        : body.detail || r.statusText
+      throw new ApiError(r.status, message)
     }
     return r.json() as Promise<T>
   }
-  if (!init?.method || init.method === "GET") return execute()
+  if (!init?.method || init.method === "GET" || path.endsWith("/cancel")) return execute()
   const title = path.endsWith("/api/look/preview") ? "生成美颜预览"
     : path === "/api/outputs/export" ? "导出成片"
     : path === "/api/pipeline/llm_models" ? "刷新模型列表"
@@ -262,6 +266,7 @@ export const api = {
   },
   auto: (b: string) => request<Job>(`/api/batches/${e(b)}/auto`, { method: "POST" }),
   jobs: () => request<Job[]>("/api/jobs"),
+  cancelJob: (id: string) => request<Job>(`/api/jobs/${e(id)}/cancel`, { method: "POST" }),
 }
 
 export const urls = {

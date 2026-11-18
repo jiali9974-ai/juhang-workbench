@@ -9,12 +9,11 @@
 from __future__ import annotations
 
 import json
-import subprocess
 import threading
 import time
 from pathlib import Path
 
-from . import config
+from . import cancellation, config
 
 DEFAULTS = {"enabled": True, "normalize": True, "smooth": 0.5, "tone": 0.5, "sharpen": 0.5}
 # tone=1 时的亮度曲线；强度 t 时每个点按 x + t*(y-x) 插值，黑白端点保持不变。
@@ -101,7 +100,7 @@ def _framing(width: int, height: int, zoom: float) -> str:
 def _grab_gray(clip: Path, t: float, framing: str, w: int, h: int):
     import numpy as np
 
-    r = subprocess.run([config.ffmpeg(), "-hide_banner", "-loglevel", "error", "-ss", f"{t:.2f}", "-i", str(clip),
+    r = cancellation.run_process([config.ffmpeg(), "-hide_banner", "-loglevel", "error", "-ss", f"{t:.2f}", "-i", str(clip),
                         "-frames:v", "1", "-vf", framing, "-f", "rawvideo", "-pix_fmt", "gray", "-"], capture_output=True)
     return np.frombuffer(r.stdout, np.uint8).reshape(h, w) if len(r.stdout) == w * h else None
 
@@ -227,7 +226,7 @@ def preview(batch: str, kind: str, s: dict | None = None, index: int = 0) -> dic
 
 
 def _ff(args: list[str]) -> None:
-    r = subprocess.run([config.ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", *args], capture_output=True, text=True,
+    r = cancellation.run_process([config.ffmpeg(), "-hide_banner", "-loglevel", "error", "-y", *args], capture_output=True, text=True,
                        encoding="utf-8", errors="ignore")
     if r.returncode:
         raise RuntimeError(f"预览图生成失败：{r.stderr[-600:]}")

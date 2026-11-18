@@ -14,7 +14,7 @@ export function useTaskList() {
     id: `upload:${item.key}`, kind: "upload", title: `${item.file.name} 上传`,
     status: item.status === "uploading" ? "running" : item.status,
     progress: item.file.size ? item.loaded / item.file.size : 0,
-    message: item.status === "done" ? "上传完成" : item.status === "queued" ? "等待上传" : `上传到「${item.batch}」`,
+    message: item.status === "done" ? "上传完成" : item.status === "cancelled" ? "已取消上传" : item.status === "queued" ? "等待上传" : `上传到「${item.batch}」`,
     error: item.error ?? "", result: null, created: item.created / 1000, finished: null,
   }))
   const pending: Job[] = requests.map((task) => ({

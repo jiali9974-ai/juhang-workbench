@@ -7,8 +7,9 @@ import { useTaskList } from "@/hooks/use-task-list"
 import { cn } from "@/lib/utils"
 import { uploadTasks } from "@/lib/upload-tasks"
 import { Button } from "@/components/ui/button"
+import { CancelTaskButton } from "@/components/cancel-task-button"
 
-const STATE = { queued: "排队", running: "", done: "完成", error: "出错" } as const
+const STATE = { queued: "排队", running: "", done: "完成", error: "出错", cancelled: "已取消" } as const
 
 export function JobsDock({ hideCompleted = false }: { hideCompleted?: boolean }) {
   const { jobs, active } = useTaskList()
@@ -32,7 +33,7 @@ export function JobsDock({ hideCompleted = false }: { hideCompleted?: boolean })
                 {busy ? <Loader2 className="size-4 animate-spin text-gold-ink" /> : failed.length ? <CircleAlert className="size-4 text-destructive" /> : <CheckCircle2 className="size-4 text-ok" />}
               </motion.span>
             </AnimatePresence>
-            <span className="flex-1 font-medium">{busy ? `${active.length} 个任务进行中` : failed.length ? `${failed.length} 个任务失败` : "任务都完成了"}</span>
+            <span className="flex-1 font-medium">{busy ? `${active.length} 个任务进行中` : failed.length ? `${failed.length} 个任务失败` : "任务已结束"}</span>
             {busy && !open && <span className="max-w-[120px] truncate text-xs text-muted-foreground">{active[0].message}</span>}
             <motion.span animate={{ rotate: open ? 180 : 0 }} transition={{ duration: 0.25, ease }}>
               <ChevronUp className="size-4 text-muted-foreground" />
@@ -55,7 +56,7 @@ export function JobsDock({ hideCompleted = false }: { hideCompleted?: boolean })
                 className="scrollbar-thin max-h-72 overflow-y-auto border-t"
               >
                 <AnimatePresence initial={false}>
-                  {[...active, ...failed, ...jobs.filter((job) => job.status === "done")].slice(0, Math.max(12, active.length + failed.length)).map((j) => (
+                  {[...active, ...failed, ...jobs.filter((job) => job.status === "done" || job.status === "cancelled")].slice(0, Math.max(12, active.length + failed.length)).map((j) => (
                     <motion.div
                       key={j.id}
                       layout
@@ -68,11 +69,12 @@ export function JobsDock({ hideCompleted = false }: { hideCompleted?: boolean })
                         {j.status === "done" && <CheckCircle2 className="size-3.5 text-ok" />}
                         <span className="flex-1 truncate">{j.title}</span>
                         <span className="text-xs text-muted-foreground tabular">
-                          {j.kind === "request" ? "进行中" : j.status === "running" ? `${Math.round(j.progress * 100)}%` : STATE[j.status]}
+                          {j.cancel_requested && j.status === "running" ? "正在取消" : j.kind === "request" ? "进行中" : j.status === "running" ? `${Math.round(j.progress * 100)}%` : STATE[j.status]}
                         </span>
                         {j.kind === "upload" && j.status === "error" && (
                           <Button size="sm" variant="ghost" className="h-6 gap-1 px-1.5" title={`重试${j.message}`} aria-label={`重试${j.title}`} onClick={() => uploadTasks.retry(j.id.slice("upload:".length))}><RefreshCw className="size-3" />重试</Button>
                         )}
+                        <CancelTaskButton job={j} />
                       </div>
                       <div className={cn("mt-0.5 truncate text-xs", j.status === "error" ? "text-destructive" : "text-muted-foreground")}>
                         {j.status === "error" ? j.error.split("\n")[0] : j.message}
