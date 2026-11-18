@@ -52,7 +52,7 @@ script:
 
 render:
   slip_trim: "audio"                      # 口误怎么处理：audio = 只删声音（换成底噪）；cut = 画面一起剪；超过 1 秒无人声时两种模式都会裁画面
-  segment_gap: {first_lead: 0.02, lead: 0.05, tail: 0.05, final_tail: 0.5}   # 片头留 0.02 秒，普通切点前后各留 0.05 秒，片尾留 0.5 秒
+  segment_gap: {first_lead: 0.02, lead: 0.05, tail: 0.05, final_tail: 0.2}   # 片头留 0.02 秒，普通切点前后各留 0.05 秒，片尾留 0.2 秒
   silence_cut: {threshold: 1.0}            # 段内超过 1 秒无人声时同步裁掉音画，中间切点前后各留 0.05 秒
   width: 1440
   height: 2560

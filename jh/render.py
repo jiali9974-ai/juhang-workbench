@@ -290,7 +290,7 @@ def plan(script: dict, progress=None) -> list[Segment]:
                 # 成片第一段开口前也只留 0.02 秒，开头第一幕直接说话。开口、说完的位置按声音判断（识别给的时间常差 0.2–0.7 秒）
                 gap = cfg["render"].get("segment_gap") or {}
                 lead = float(gap.get("first_lead", 0.02)) if gi == 0 else float(gap.get("lead", 0.05))
-                tail = float(gap.get("final_tail", 0.5) if gi == len(groups) - 1 else gap.get("tail", 0.05))
+                tail = float(gap.get("final_tail", 0.2) if gi == len(groups) - 1 else gap.get("tail", 0.05))
                 v0, v1 = tighten(material / g[0]["clip"], keep_iv[0][0], keep_iv[-1][1], lead, tail)
             seg = Segment(clip=material / g[0]["clip"], v_start=v0, v_dur=v1 - v0, zoom=g[0].get("zoom"))
             seg.audio_wav = clean_audio(script["batch"], seg.clip, v0, v1 - v0, keep_iv)
@@ -373,7 +373,7 @@ def apply_speech_timing(segs: list[Segment], progress=None) -> list[Segment]:
                                                first_lead=float(gap.get("first_lead", .02)) if index == 0 else lead)
         if voices and index == len(segs) - 1:
             a, _ = ranges[-1]
-            ranges[-1] = (a, round(max(b for _, b in voices) + float(gap.get("final_tail", .5)), 3))
+            ranges[-1] = (a, round(max(b for _, b in voices) + float(gap.get("final_tail", .2)), 3))
         for a, b in ranges:
             subs = [(round(max(a, x) - a, 3), round(min(b, y) - a, 3), text)
                     for x, y, text in seg.subs if min(b, y) > max(a, x)]

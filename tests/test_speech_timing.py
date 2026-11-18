@@ -18,7 +18,7 @@ class SpeechTimingTests(unittest.TestCase):
         self.root = Path(self.temp.name)
         self.cfg = copy.deepcopy(config.load())
         self.cfg["render"].update(width=90, height=160, fps=60, encoder="libx264",
-                                  segment_gap={"first_lead": .02, "lead": .05, "tail": .05, "final_tail": .5},
+                                  segment_gap={"first_lead": .02, "lead": .05, "tail": .05, "final_tail": .2},
                                   silence_cut={"threshold": 1.0})
         for target, value in [("load", lambda: self.cfg), ("data_root", lambda: self.root)]:
             replacement = patch.object(config, target, value)
@@ -39,15 +39,19 @@ class SpeechTimingTests(unittest.TestCase):
         self.assertEqual(speech_timing.retained_ranges([(.2, .8), (2, 2.5)], 3, first_lead=.02),
                          [(.18, .85), (1.95, 2.55)])
 
-    def test_only_the_final_segment_has_half_a_second_after_speech(self):
-        segs = [render.Segment(self.root / "a.mp4", 10, 2), render.Segment(self.root / "b.mp4", 20, 2)]
-        with patch.object(render, "_clip_audio", return_value=np.ones((96000, 2), np.float32)), \
-             patch.object(speech_timing, "detect", return_value=[(.1, 1.5)]):
-            result = render.apply_speech_timing(segs)
-        self.assertAlmostEqual(result[0].v_start, 10.08)
-        self.assertAlmostEqual(result[1].v_start, 20.05)
-        self.assertAlmostEqual(result[0].v_start + result[0].v_dur, 11.55)
-        self.assertAlmostEqual(result[1].v_start + result[1].v_dur, 22.0)
+    def test_final_segment_has_point_two_seconds_and_internal_tail_stays_point_zero_five(self):
+        for explicit in (True, False):
+            with self.subTest(explicit_config=explicit):
+                if not explicit:
+                    self.cfg["render"]["segment_gap"].pop("final_tail")
+                segs = [render.Segment(self.root / "a.mp4", 10, 2), render.Segment(self.root / "b.mp4", 20, 2)]
+                with patch.object(render, "_clip_audio", return_value=np.ones((96000, 2), np.float32)), \
+                     patch.object(speech_timing, "detect", return_value=[(.1, 1.5)]):
+                    result = render.apply_speech_timing(segs)
+                self.assertAlmostEqual(result[0].v_start, 10.08)
+                self.assertAlmostEqual(result[1].v_start, 20.05)
+                self.assertAlmostEqual(result[0].v_start + result[0].v_dur, 11.55)
+                self.assertAlmostEqual(result[1].v_start + result[1].v_dur, 21.7)
 
     def test_split_moves_video_audio_and_subtitles_together(self):
         seg = render.Segment(self.root / "video.mp4", 10, 3, audio_wav=self.root / "voice.wav", a_start=5,
@@ -57,7 +61,7 @@ class SpeechTimingTests(unittest.TestCase):
             first, last = render.apply_speech_timing([seg])
         audio.assert_called_once_with(seg.audio_wav, 5, 3)
         self.assertEqual((first.v_start, first.a_start, first.v_dur), (10.18, 5.18, .67))
-        self.assertEqual((last.v_start, last.a_start, last.v_dur), (11.96, 6.96, 1.14))
+        self.assertEqual((last.v_start, last.a_start, last.v_dur), (11.96, 6.96, .84))
         self.assertEqual(first.subs, [(.02, .62, "第一句")])
         self.assertEqual(last.subs, [(.05, .64, "第二句")])
         self.assertEqual(last.zoom, 1.2)
@@ -109,7 +113,7 @@ class SpeechTimingTests(unittest.TestCase):
         with patch.object(render, "_clip_audio", return_value=np.ones((48000, 2), np.float32)), \
              patch.object(speech_timing, "detect", return_value=[(.02, 1)]):
             last = render.apply_speech_timing([seg])[0]
-        self.assertEqual(last.v_dur, 1.5)
+        self.assertEqual(last.v_dur, 1.2)
         self.assertEqual(last.a_dur, 1)
 
     def test_detector_bounds_its_output_and_reuses_audio_analysis(self):
@@ -138,13 +142,13 @@ class SpeechTimingTests(unittest.TestCase):
             parts = render.apply_speech_timing([seg])
         out = self.root / "last.mp4"
         render.encode_segment(parts[-1], out, look.normalize({"enabled": False}))
-        self.assertAlmostEqual(media.probe(out).duration, 1.14, delta=1 / 60 + .002)
+        self.assertAlmostEqual(media.probe(out).duration, .84, delta=1 / 60 + .002)
         audio = render._clip_audio(out).mean(axis=1)
         section = audio[round(.12 * sr):round(.4 * sr)]
         frequencies = np.fft.rfftfreq(len(section), 1 / sr)
         peak = frequencies[np.argmax(np.abs(np.fft.rfft(section)))]
         self.assertAlmostEqual(peak, 880, delta=10)  # 错用音轨开头会变成 440 Hz。
-        self.assertLess(float(np.sqrt(np.mean(audio[-round(.45 * sr):] ** 2))), .005)
+        self.assertLess(float(np.sqrt(np.mean(audio[-round(.15 * sr):] ** 2))), .005)
 
 
 if __name__ == "__main__":
