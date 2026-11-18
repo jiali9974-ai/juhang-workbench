@@ -5,6 +5,7 @@ import hashlib
 from pathlib import Path
 
 import yaml
+from select_device import select
 
 
 def make(source: Path, base: Path, output: Path) -> None:
@@ -36,15 +37,7 @@ def make(source: Path, base: Path, output: Path) -> None:
     ffmpeg = str(base / "engines/nvenc-compat" / digest / "ffmpeg")
     cfg["paths"].update(material_root=str(base / "materials"), data_root=str(base / "data"),
                         output_root=str(base / "outputs"), ffmpeg=ffmpeg, cosyvoice_repo="")
-    cfg["asr"]["device"] = "cuda:0"
-    # Test an actual session: a listed encoder does not prove a vGPU permits it.
-    probe = subprocess.run([
-        ffmpeg, "-hide_banner", "-loglevel", "error",
-        "-f", "lavfi", "-i", "color=size=640x360:rate=1", "-frames:v", "1",
-        "-c:v", "h264_nvenc", "-f", "null", "-",
-    ], capture_output=True, timeout=20)
-    cfg["render"]["encoder"] = "h264_nvenc" if probe.returncode == 0 else "libx264"
-    cfg.setdefault("gpu", {})["mode"] = "local"
+    cfg = select(cfg)
     # This server edits source footage and keeps its original speech.
     cfg["script"]["dub_mandarin"] = False
     output.write_text(yaml.safe_dump(cfg, allow_unicode=True, sort_keys=False), encoding="utf-8")

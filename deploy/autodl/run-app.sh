@@ -10,4 +10,7 @@ export OMP_NUM_THREADS=8
 export MKL_NUM_THREADS=8
 export MPLCONFIGDIR="$BASE/cache/matplotlib"
 cd "$CURRENT/source"
+if [[ -f deploy/autodl/select_device.py ]]; then
+    "$CURRENT/venv/bin/python" deploy/autodl/select_device.py "$JH_CONFIG"
+fi
 exec "$CURRENT/venv/bin/uvicorn" app:app --host 0.0.0.0 --port 6006
