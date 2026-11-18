@@ -190,7 +190,7 @@ class OutputApiTests(unittest.TestCase):
         (other / "保留.mp4").write_bytes(b"keep")
         self.video("项目甲", "成片")
         self.video("项目乙", "保留成片")
-        generated = ("transcripts", "scripts", "outputs", "renders", "preview", "thumbs", "voice_refs", "dub")
+        generated = ("transcripts", "scripts", "outputs", "renders", "preview", "thumbs", "voice_refs", "dub", "script_runs")
         for sub in generated:
             nested = self.root / sub / "项目甲" / "nested"
             nested.mkdir(parents=True, exist_ok=True)

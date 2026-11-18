@@ -311,6 +311,8 @@ def generate(batch: str):
         p.set_stage("script")
         p(0, 1, "大模型出剪辑脚本中")
         scripts = scriptmod.generate(batch, ts, p)
+        if not scripts:
+            raise RuntimeError("没有生成有效剪辑脚本，请重试或检查素材识别结果")
         scriptmod.archive_batch(batch)   # 旧脚本和旧成片挪去 _old_时间 目录，不删除
         for s in scripts:
             scriptmod.save(s)
@@ -448,6 +450,8 @@ def auto(batch: str):
         p.set_stage("script")
         p(1, 3, "大模型出剪辑脚本中")
         scripts = scriptmod.generate(batch, ts, lambda i, n, m: p(1 + (i / n if n else 0), 3, m))
+        if not scripts:
+            raise RuntimeError("没有生成有效剪辑脚本，请重试或检查素材识别结果")
         scriptmod.archive_batch(batch)
         for s in scripts:
             s["status"] = "approved"
@@ -687,7 +691,7 @@ def delete_batch(batch: str):
         raise HTTPException(409, "这个项目还有任务在跑，等跑完再删")
     root = config.data_root()
     targets = [(config.material_root(), batch), (config.output_root(), batch)]
-    targets.extend((root / sub, batch) for sub in ("transcripts", "scripts", "renders", "preview", "thumbs", "voice_refs", "dub", "upload_receipts"))
+    targets.extend((root / sub, batch) for sub in ("transcripts", "scripts", "renders", "preview", "thumbs", "voice_refs", "dub", "upload_receipts", "script_runs"))
     targets.append((root / "clipinfo", f"{batch}.json"))
     try:
         deletion.delete_children(targets)

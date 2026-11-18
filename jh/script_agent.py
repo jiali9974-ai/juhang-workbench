@@ -1,17 +1,19 @@
-"""剪辑智能体：按 skills/edit_script.md 出剪辑脚本，一组素材只调用一次大模型。
+"""剪辑智能体：按 skills/edit_script.md 出剪辑脚本，无效响应最多尝试三次。
 
 三个阶段（分析句子 → 逐句质检 → 组合并整体检查，不合格就重选）由大模型在这一次调用里自己做完，只输出最后的脚本。
-程序只做两件不调接口的事：
+程序在调用前后处理：
 - 调用前：量好每句的时长、语速、句中停顿、和上一句首尾重复的字、句内重复、和前几句很像（重说），用“⚠”附在句子后面；
-- 调用后：兜底——去掉不存在的编号和重复的句子、keep 不是“只删字”就退回原话、内容几乎一样的两句只留一句；不按时长丢弃脚本。
+- 调用后：校验结构和句子编号，无效响应重试并保留诊断；去掉重复的句子、keep 不是“只删字”就退回原话；不按时长丢弃脚本。
 """
 from __future__ import annotations
 
 import difflib
 import json
 import re
+import time
+import uuid
 
-from . import config, llm, script as scriptmod
+from . import config, deletion, llm, script as scriptmod
 
 SKILL = config.ROOT / "skills" / "edit_script.md"
 GROUP_SECONDS = 1200         # 素材按人声时长分组交给大模型，每组最多约 20 分钟
@@ -132,19 +134,61 @@ def _groups(transcripts: list[dict]) -> list[list[dict]]:
 
 # ---------------- 调用 ----------------
 
+def _validate_response(data: object, refs: set[str]) -> dict:
+    """JSON 能解析不代表能剪片；所有选句必须来自本组素材。"""
+    if not isinstance(data, dict) or not isinstance(data.get("videos"), list):
+        raise ValueError("必须返回包含 videos 数组的 JSON 对象")
+    if not data["videos"]:
+        reason = str(data.get("empty_reason") or "未提供原因")[:300]
+        raise ValueError(f"videos 为空，没有可出片的脚本（{reason}）")
+    for vi, video in enumerate(data["videos"], 1):
+        if not isinstance(video, dict) or not isinstance(video.get("lines"), list) or not video["lines"]:
+            raise ValueError(f"第 {vi} 条视频缺少非空 lines 数组")
+        for li, line in enumerate(video["lines"], 1):
+            ref = str(line.get("ref") or "").strip() if isinstance(line, dict) else ""
+            if ref not in refs:
+                raise ValueError(f"第 {vi} 条视频第 {li} 句引用了本组不存在的编号 {ref[:80]!r}，请使用输入中的 C数字-S数字 编号")
+    return data
+
+
 def _ask(batch: str, body: str, done_titles: list[str]) -> dict:
     done = ("\n\n前面几组素材已经出过这些成片，同一组内容不要再出：\n" + "\n".join(f"- {t}" for t in done_titles)) if done_titles else ""
+    refs = set(re.findall(r"^(C\d+-S\d+) \[", body, re.M))
+    run_dir = deletion.child_path(config.data_root() / "script_runs", batch) / f"{time.time_ns()}-{uuid.uuid4().hex[:8]}"
+    run_dir.mkdir(parents=True)
+    prompt = system_prompt()
     last_err = None
-    for _ in range(3):
-        text = llm.chat([
-            {"role": "system", "content": system_prompt()},
-            {"role": "user", "content": f"以下是拍摄批次 {batch} 的一组素材识别结果：\n{body}{done}"},
-        ], json_mode=True, temperature=0.3, max_tokens=16000)
+    for attempt in range(1, 4):
+        feedback = (f"\n\n上一次输出未通过校验：{last_err}。请重新检查素材并返回完整有效的 JSON；"
+                    "只能引用本组已有的句子编号，不要编造内容。若确实没有可用内容，返回 videos: [] 并用 empty_reason 说明具体原因。") if last_err else ""
+        messages = [
+            {"role": "system", "content": prompt},
+            {"role": "user", "content": f"以下是拍摄批次 {batch} 的一组素材识别结果：\n{body}{done}{feedback}"},
+        ]
+        parameters = dict(json_mode=True, temperature=0.3, max_tokens=16000)
+        (run_dir / f"request-{attempt}.json").write_text(json.dumps({
+            "batch": batch, "messages": messages, "parameters": parameters,
+        }, ensure_ascii=False, indent=2), encoding="utf-8")
         try:
-            return scriptmod._extract_json(text)
-        except ValueError as e:             # 偶尔输出不完整，重试
+            text = llm.chat(messages, **parameters)
+        except Exception as e:
+            (run_dir / f"validation-{attempt}.json").write_text(json.dumps({
+                "status": "request_error", "error_type": type(e).__name__,
+            }), encoding="utf-8")
+            raise
+        (run_dir / f"response-{attempt}.txt").write_text(text, encoding="utf-8")
+        try:
+            result = _validate_response(scriptmod._extract_json(text), refs)
+        except ValueError as e:
             last_err = e
-    raise RuntimeError(f"大模型返回的脚本格式不对：{last_err}")
+            report = {"status": "rejected", "error": str(e)}
+        else:
+            report = {"status": "accepted", "videos": len(result["videos"])}
+        (run_dir / f"validation-{attempt}.json").write_text(
+            json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
+        if report["status"] == "accepted":
+            return result
+    raise RuntimeError(f"大模型连续 3 次未生成有效脚本：{last_err}（诊断编号 {run_dir.name}）")
 
 
 # ---------------- 调用后：兜底 ----------------
@@ -175,12 +219,14 @@ def _lines(video: dict, index: dict) -> list[dict]:
 
 
 def generate(batch: str, transcripts: list[dict], progress=None) -> list[dict]:
-    """生成这一批素材的剪辑脚本（草稿）。素材多时分组，每组调用一次大模型。"""
+    """生成这一批素材的剪辑脚本（草稿）。素材多时分组，无效响应重试。"""
     index, numbered = {}, {}
     for ci, t in enumerate(transcripts, 1):                    # 全批统一编号
         numbered[t["clip"]] = ci
         for si, s in enumerate(t["sentences"], 1):
             index[f"C{ci}-S{si}"] = (t, s)
+    if not any(_bare(s["text"]) for _, s in index.values()):
+        raise RuntimeError("素材识别结果中没有有效口播，无法生成剪辑脚本，请检查素材和语音识别结果")
     videos: list[dict] = []
     groups = _groups(transcripts)                               # 怎么分组（每组表、门店介绍）由 skill 在阶段一按内容自己分
 
@@ -211,6 +257,8 @@ def generate(batch: str, transcripts: list[dict], progress=None) -> list[dict]:
             "voice_mode": "auto" if scriptmod.dub_mandarin() else "original",
             "status": "draft", "lines": lines,
         })
+    if not scripts:
+        raise RuntimeError("没有生成有效剪辑脚本，请检查模型返回的句子编号和素材识别结果")
     for i, s in enumerate(scripts, 1):
         s["id"] = f"{batch}_{i:02d}"
     return scripts
