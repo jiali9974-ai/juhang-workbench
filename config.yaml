@@ -26,8 +26,7 @@ llm:
   # api_key_env 改 JH_DEEPSEEK_API_KEY（secrets.yaml 里还留着旧 Key）
 
 script:
-  min_seconds: 25                         # 每条成片的时长范围（按选中句子的原声时长算）
-  max_seconds: 45
+  # 素材和成片不限制时长，按内容完整性选句。
   # 语音识别常见错字 → 正确写法。大模型写字幕时会按这张表改，你们可以随时补充
   glossary:
     - "工价 → 公价"

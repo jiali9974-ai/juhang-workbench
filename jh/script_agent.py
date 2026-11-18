@@ -3,7 +3,7 @@
 三个阶段（分析句子 → 逐句质检 → 组合并整体检查，不合格就重选）由大模型在这一次调用里自己做完，只输出最后的脚本。
 程序只做两件不调接口的事：
 - 调用前：量好每句的时长、语速、句中停顿、和上一句首尾重复的字、句内重复、和前几句很像（重说），用“⚠”附在句子后面；
-- 调用后：兜底——去掉不存在或重复引用的句子编号、keep 不是“只删字”就退回原话、时长明显不够的整条不要。
+- 调用后：兜底——去掉不存在或重复引用的句子编号、keep 不是“只删字”就退回原话；不按时长丢弃脚本。
 """
 from __future__ import annotations
 
@@ -27,8 +27,7 @@ def system_prompt() -> str:
         raise RuntimeError(f"{SKILL.name} 里缺少提示词：{'、'.join(missing)}")
     sc = config.load().get("script", {})
     text = raw["system"].replace("{subtitle_rules}", raw["subtitle_original"])
-    vals = {"min_s": str(sc.get("min_seconds", 25)), "max_s": str(sc.get("max_seconds", 45)),
-            "glossary": "\n".join(f"  - {g}" for g in sc.get("glossary", [])) or "  （无）",
+    vals = {"glossary": "\n".join(f"  - {g}" for g in sc.get("glossary", [])) or "  （无）",
             "keep_as_is": "、".join(sc.get("keep_as_is", [])) or "（无）"}
     for k, v in vals.items():
         text = text.replace("{" + k + "}", v)
@@ -171,11 +170,10 @@ def generate(batch: str, transcripts: list[dict], progress=None) -> list[dict]:
         progress(0, 1, f"大模型统一规划全部 {len(transcripts)} 条素材")
     videos = _ask(batch, "\n".join(clip_rows(transcripts))).get("videos", [])
 
-    min_s = config.load().get("script", {}).get("min_seconds", 25)
     scripts = []
     for v in videos:
         lines = _lines(v, index)
-        if not lines or sum(l["end"] - l["start"] for l in lines) < min_s * 0.7:   # 时长明显不够的不要
+        if not lines:
             continue
         scripts.append({
             "id": "", "batch": batch, "title": v.get("title") or batch,
