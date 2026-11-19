@@ -6,6 +6,7 @@ import { FrameEditor } from "@/components/frame-editor"
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useSessionState } from "@/hooks/use-session-state"
+import { useJobs } from "@/hooks/use-jobs"
 import { api, type Batch, type OutputVideo } from "@/lib/api"
 import { getCurrent } from "@/lib/current"
 import { PAGE_CONTAINER, PAGE_TITLE } from "@/lib/layout"
@@ -18,6 +19,7 @@ export function BeautyPage({ batch }: { batch?: string }) {
   const [selection, setSelection] = useSessionState("beauty.source", "default")
   const [revision, setRevision] = useSessionState("beauty.sources-revision", 0)
   const [refreshing, setRefreshing] = useState(true)
+  const { version } = useJobs()
 
   const refresh = useCallback((notify = false) =>
     Promise.all([api.outputs(), api.batches()]).then(([videos, projects]) => {
@@ -32,7 +34,7 @@ export function BeautyPage({ batch }: { batch?: string }) {
       toast.error("更新成片失败", { description: String(error).replace(/^Error: /, "") })
     }).finally(() => setRefreshing(false)), [setOutputs, setBatches, setSelection, setRevision])
 
-  useEffect(() => { void refresh() }, [refresh])
+  useEffect(() => { void refresh() }, [refresh, version])
 
   const selected = outputs.find((video) => sourceKey(video) === selection)
   const source = useMemo(() => selected ? { batch: selected.batch, id: selected.id } : null, [selected])
@@ -62,7 +64,7 @@ export function BeautyPage({ batch }: { batch?: string }) {
 
   return (
     <div className={PAGE_CONTAINER}>
-      <FrameEditor batch={project?.batch ?? null} scripts={project?.scripts ?? 0} source={source}
+      <FrameEditor key={selected ? sourceKey(selected) : "default"} batch={project?.batch ?? null} outputs={outputs} source={source}
         revision={`${selected?.updated ?? "default"}:${revision}`} header={header} />
     </div>
   )

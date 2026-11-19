@@ -4,9 +4,13 @@ import { toast } from "sonner"
 import { Button } from "@/components/ui/button"
 import { MediaFrame } from "@/components/feature-panel"
 import { GraphicsCanvas, StickerShape } from "@/components/graphics-canvas"
+import { ApplyToOutputs } from "@/components/apply-to-outputs"
+import { SubtitleContent } from "@/components/subtitle-content"
+import { useSubtitleDrafts } from "@/hooks/use-subtitle-drafts"
 import { useSessionState } from "@/hooks/use-session-state"
 import { useJobs } from "@/hooks/use-jobs"
 import { api, urls, type LookSettings, type OutputVideo } from "@/lib/api"
+import { outputKey, renderSelected } from "@/lib/frame-workflow"
 import { previewCache } from "@/lib/background-tasks"
 import { ANIMATIONS, STICKERS, makeElement, type GraphicElement, type GraphicsSettings, type EditorFont, type TextStyle } from "@/lib/graphics"
 import { cn } from "@/lib/utils"
@@ -37,12 +41,16 @@ function Range({ label, value, onChange, disabled, hint }: { label: string; valu
     <span className="text-xs leading-relaxed text-muted-foreground">{hint}</span></label>
 }
 
-export function FrameEditor({ batch, scripts, source, revision, header }: {
-  batch: string | null; scripts: number; source: Pick<OutputVideo, "batch" | "id"> | null; revision: string; header: ReactNode
+export function FrameEditor({ outputs, source, revision, header }: {
+  batch: string | null; outputs: OutputVideo[]; source: Pick<OutputVideo, "batch" | "id"> | null; revision: string; header: ReactNode
 }) {
   const [editor, setEditor] = useSessionState<EditorState | null>("frame-editor.v1", null)
   const [tab, setTab] = useSessionState<"look" | "text" | "stickers">("frame-editor.tab", "text")
-  const [selected, setSelected] = useSessionState("frame-editor.selected", "subtitle")
+  const [selected, setSelected] = useState<string | null>(null)
+  const [applyOpen, setApplyOpen] = useState(false)
+  const [subtitleIndex, setSubtitleIndex] = useState(0)
+  const subtitles = useSubtitleDrafts(source, revision)
+  const subtitleText = subtitles.draft?.script.lines[subtitleIndex]?.subtitle ?? "这是口播字幕预览"
   const [loadError, setLoadError] = useState("")
   const [saving, setSaving] = useState(false)
   const [fontBusy, setFontBusy] = useState(false)
@@ -56,13 +64,12 @@ export function FrameEditor({ batch, scripts, source, revision, header }: {
   const [video, setVideo] = useState("")
   const videoDialog = useRef<HTMLDialogElement>(null)
   const fontInput = useRef<HTMLInputElement>(null)
-  const { watch, active } = useJobs()
+  const { watch } = useJobs()
   useEffect(() => {
     const dialog = videoDialog.current
     if (video && dialog && !dialog.open) dialog.showModal()
     if (!video && dialog?.open) dialog.close()
   }, [video])
-  const rendering = active.some((job) => batch && job.title.startsWith(batch) && (job.kind === "render" || job.kind === "auto"))
   const fetchState = useCallback(() => {
     return Promise.all([api.getLook(), api.getGraphics()]).then(([look, design]) => {
       setEditor({ look: look.settings, design: design.settings, fonts: design.fonts, defaultLook: look.defaults, defaultDesign: design.defaults,
@@ -94,6 +101,14 @@ export function FrameEditor({ batch, scripts, source, revision, header }: {
   const previewKey = editor ? JSON.stringify(["frame-background", source, revision, editor.look]) : null
   const snapshot = useCallback(() => previewCache.get<Preview>(previewKey), [previewKey])
   const preview = useSyncExternalStore(previewCache.subscribe, snapshot, snapshot)
+  const captionKey = JSON.stringify(["caption-preview", subtitleText])
+  const captionSnapshot = useCallback(() => previewCache.get<Awaited<ReturnType<typeof api.captionPreview>>>(captionKey), [captionKey])
+  const caption = useSyncExternalStore(previewCache.subscribe, captionSnapshot, captionSnapshot)
+  useEffect(() => {
+    const timer = setTimeout(() => previewCache.start(captionKey, () => api.captionPreview(subtitleText)), 200)
+    return () => clearTimeout(timer)
+  }, [captionKey, subtitleText])
+  const shownSubtitle = caption.data ? caption.data.chunks.find((chunk) => time % 6 >= chunk.start && time % 6 < chunk.end)?.text ?? "" : subtitleText
   const lookSettings = editor?.look
   useEffect(() => {
     if (!lookSettings || !previewKey) return
@@ -108,7 +123,7 @@ export function FrameEditor({ batch, scripts, source, revision, header }: {
   const changeLook = (patch: Partial<LookSettings>) => setEditor((current) => current ? { ...current, look: { ...current.look, ...patch } } : current)
   const element = editor?.design.elements.find((item) => item.id === selected)
   const layer = selected === "subtitle" ? editor?.design.subtitle : element
-  const changed = !!editor && (JSON.stringify(editor.look) !== JSON.stringify(editor.savedLook) || JSON.stringify(editor.design) !== JSON.stringify(editor.savedDesign))
+  const changed = subtitles.dirty || !!editor && (JSON.stringify(editor.look) !== JSON.stringify(editor.savedLook) || JSON.stringify(editor.design) !== JSON.stringify(editor.savedDesign))
   function choose(id: string) { setSelected(id); const item = editor?.design.elements.find((layer) => layer.id === id); if (item) seek(item.start) }
   function add(type: "text" | "sticker", icon: GraphicElement["icon"] = "arrow") {
     if (!editor) return
@@ -132,19 +147,24 @@ export function FrameEditor({ batch, scripts, source, revision, header }: {
       return { ...settings, elements: items }
     })
   }
-  async function save(rerender = false) {
-    if (!editor) return
+  async function save(targets?: string[]): Promise<string[]> {
+    if (!editor) return targets ?? []
     setSaving(true)
     try {
+      await subtitles.saveAll()
       const design = await api.saveGraphics(editor.design), look = await api.saveLook(editor.look)
       setEditor((current) => current ? { ...current, design: current.design === editor.design ? design.settings : current.design,
         look: current.look === editor.look ? look.settings : current.look, savedDesign: design.settings, savedLook: look.settings } : current)
-      if (rerender && batch) {
-        const jobs = await api.renderAll(batch, true)
-        jobs.forEach((job) => watch(job, (done) => toast.success(`${done.title} 完成`)))
-        toast.success(`已保存，「${batch}」${jobs.length} 条视频开始重新出片`)
-      } else toast.success("画面设置已保存", { description: "之后的单条和批量出片都会使用这些设置" })
-    } catch (error) { toast.error("保存失败", { description: String(error).replace(/^Error: /, "") }) }
+      if (targets) {
+        const result = await renderSelected(outputs, targets, (batch, id) => api.renderWithSettings(batch, id, look.settings, design.settings),
+          (job) => watch(job, (done) => toast.success(`${done.title} 完成`)))
+        if (result.accepted.length) toast.success(`已保存，${result.accepted.length} 条所选成片已加入重出队列`)
+        if (result.failed.length) toast.error(`${result.failed.length} 条成片未能加入队列，可保留勾选后重试`, { description: result.failed.map((item) => `${item.title}：${item.error}`).join("；") })
+        else setApplyOpen(false)
+        return result.failed.map((item) => item.key)
+      } else toast.success("画面设置与字幕已保存", { description: "已有成片可选择后应用并重新出片" })
+      return []
+    } catch (error) { toast.error("保存未完成", { description: String(error).replace(/^Error: /, "") }); return targets ?? [] }
     finally { setSaving(false) }
   }
   async function upload(file?: File) {
@@ -170,13 +190,14 @@ export function FrameEditor({ batch, scripts, source, revision, header }: {
   async function renderPreview() {
     if (!editor) return
     setPreviewBusy(true)
-    try { const result = await api.graphicsPreview(editor.design, source, editor.look); setVideo(result.url) }
+    try { const result = await api.graphicsPreview(editor.design, source, editor.look, subtitleText); setVideo(result.url) }
     catch (e) { toast.error("生成预览失败", { description: String(e).replace(/^Error: /, "") }) }
     finally { setPreviewBusy(false) }
   }
 
   return <>
     {header}
+    {applyOpen && <ApplyToOutputs videos={outputs} preferred={source ? outputKey(source) : null} busy={saving} onClose={() => setApplyOpen(false)} onApply={save} />}
     <div className="mb-8 flex flex-wrap items-center justify-between gap-4 border-b pb-4">
       <div className="inline-flex gap-1 rounded-full bg-muted p-1" role="tablist" aria-label="画面编辑功能">
         {([["look", "画面调整", SlidersHorizontal], ["text", "文字与字幕", Type], ["stickers", "动画标识", Sparkles]] as const).map(([key, label, Icon]) =>
@@ -192,7 +213,7 @@ export function FrameEditor({ batch, scripts, source, revision, header }: {
             <label className="flex items-center justify-between text-sm">开启美颜调色<input type="checkbox" className="size-4 accent-[var(--foreground)]" checked={editor.look.enabled} onChange={(e) => changeLook({ enabled: e.target.checked })} /></label>
             <label className="flex items-center justify-between text-sm">统一不同素材的光线<input type="checkbox" className="size-4 accent-[var(--foreground)]" disabled={!editor.look.enabled} checked={editor.look.normalize} onChange={(e) => changeLook({ normalize: e.target.checked })} /></label>
             <Range label="磨皮" value={editor.look.smooth} onChange={(smooth) => changeLook({ smooth })} disabled={!editor.look.enabled} hint="局部柔化肤质，保护眼眉和嘴唇。" />
-            <Range label="提亮调色" value={editor.look.tone} onChange={(tone) => changeLook({ tone })} disabled={!editor.look.enabled} hint="提升亮度，保留自然肤色和高光。" />
+            <Range label="提亮调色" value={editor.look.tone} onChange={(tone) => changeLook({ tone })} disabled={!editor.look.enabled} hint="通透提亮、自然红润肤色与干净浅蓝，保留黑白层次。" />
             <Range label="手表特写锐化" value={editor.look.sharpen} onChange={(sharpen) => changeLook({ sharpen })} disabled={!editor.look.enabled} hint="作用于没有人脸的特写画面。" />
           </section> : <>
             <section className="rounded-2xl border p-4">
@@ -211,7 +232,7 @@ export function FrameEditor({ batch, scripts, source, revision, header }: {
             </section>
             {layer && <section className="grid gap-4 rounded-2xl border p-5" aria-label="选中元素属性">
               <div className="flex items-center justify-between"><h3 className="font-semibold">{selected === "subtitle" ? "口播字幕样式" : element?.type === "text" ? "编辑文字" : "编辑标识"}</h3><label className="flex items-center gap-2 text-xs text-muted-foreground"><input type="checkbox" checked={layer.enabled} onChange={(e) => update({ enabled: e.target.checked })} />显示</label></div>
-              {selected === "subtitle" ? <p className="text-xs leading-relaxed text-muted-foreground">预览中的字幕是示例；出片时会使用剪辑脚本里的实际字幕内容。</p> :
+              {selected === "subtitle" ? <p className="text-xs leading-relaxed text-muted-foreground">字幕样式用于口播文字，逐句内容可在下方直接修改。</p> :
                 (element?.type === "text" || element?.icon === "badge") && <Field label="文字内容"><textarea className={`${inputClass} h-20 resize-y py-2`} maxLength={300} value={element.text} onChange={(e) => update({ text: e.target.value })} placeholder="输入要显示的文字，回车换行" /></Field>}
               {(selected === "subtitle" || element?.type === "text" || element?.icon === "badge") && <div className="grid grid-cols-[1fr_auto] items-end gap-3"><Field label="字体"><select className={inputClass} value={layer.font_id} onChange={(e) => update({ font_id: e.target.value })}>{editor.fonts.map((font) => <option key={font.id} value={font.id}>{font.name}</option>)}</select></Field><Button size="sm" variant={layer.bold ? "secondary" : "outline"} aria-pressed={layer.bold} onClick={() => update({ bold: !layer.bold })} className="h-9 font-bold">加粗</Button></div>}
               <div className="grid grid-cols-2 gap-3"><NumberField label={element?.type === "sticker" ? "标识大小" : "字号"} value={layer.size} min={16} max={600} onChange={(size) => update({ size })} />
@@ -226,6 +247,8 @@ export function FrameEditor({ batch, scripts, source, revision, header }: {
                 <div className="flex flex-wrap gap-2 border-t pt-4"><Button variant="outline" size="sm" onClick={duplicate}><Copy />复制</Button><Button variant="outline" size="sm" onClick={() => reorder(-1)} title="移到下一层"><ArrowDown />下一层</Button><Button variant="outline" size="sm" onClick={() => reorder(1)} title="移到上一层"><ArrowUp />上一层</Button><Button variant="ghost" size="sm" className="ml-auto text-destructive" onClick={remove}><Trash2 />删除</Button></div>
               </>}
             </section>}
+            {tab === "text" && <SubtitleContent draft={subtitles.draft} loading={subtitles.loading} error={subtitles.error} disabled={saving}
+              selected={subtitleIndex} onSelect={setSubtitleIndex} onChange={subtitles.update} onReload={subtitles.reload} />}
             {tab === "text" && <details className="rounded-2xl border p-4"><summary className="cursor-pointer text-sm font-medium">字体库 · {editor.fonts.length} 款字体</summary><div className="mt-4 grid gap-3">
               <p className="text-xs leading-relaxed text-muted-foreground">内置字体可直接使用。上传自己的 TTF / OTF 字体后，字幕和文字都能选择它。</p><input ref={fontInput} type="file" accept=".ttf,.otf" className="hidden" onChange={(event) => void upload(event.target.files?.[0])} aria-label="上传字体文件" />
               <Button variant="outline" size="sm" disabled={fontBusy} onClick={() => fontInput.current?.click()}>{fontBusy ? <Loader2 className="animate-spin" /> : <Upload />}添加字体</Button>
@@ -233,20 +256,21 @@ export function FrameEditor({ batch, scripts, source, revision, header }: {
             </div></details>}
           </>}
           <div className="flex flex-wrap gap-2 border-t pt-4"><Button className="rounded-full" disabled={saving || !changed} onClick={() => void save()}>{saving ? <Loader2 className="animate-spin" /> : changed ? <Save /> : <Check />}{changed ? "保存设置" : "已保存"}</Button>
-            <Button className="rounded-full" variant="outline" disabled={saving || rendering || !batch || !scripts} onClick={() => void save(true)}><Film />保存并重新出片{batch && scripts ? `（${scripts} 条）` : ""}</Button>
-            <Button variant="ghost" size="sm" disabled={saving} onClick={() => { setEditor({ ...editor, look: editor.defaultLook, design: editor.defaultDesign }); setSelected("subtitle"); seek(0) }}><RotateCcw />恢复默认</Button></div>
-          <p className="text-xs leading-relaxed text-muted-foreground">这些设置用于之后的单条和批量出片。已有成片可点「保存并重新出片」更新{batch ? `「${batch}」` : "当前项目"}。</p>
+            <Button className="rounded-full" variant="outline" disabled={saving || !outputs.length} onClick={() => setApplyOpen(true)}><Film />保存应用到成片</Button>
+            <Button variant="ghost" size="sm" disabled={saving} onClick={() => { setEditor({ ...editor, look: editor.defaultLook, design: editor.defaultDesign }); setSelected(null); seek(0) }}><RotateCcw />恢复默认</Button></div>
+          <p className="text-xs leading-relaxed text-muted-foreground">保存后可勾选需要更新的成片，按当前画面设置逐条重新出片；字幕内容保存回各自的脚本。</p>
         </div>
         <div className="order-1 grid gap-3 lg:order-2 lg:sticky lg:top-6">
           <div className="flex items-center justify-between text-xs text-muted-foreground"><span className="flex items-center gap-1.5"><ImagePlus className="size-3.5" />{source ? "使用所选成片的原始画面" : "默认测试画面"}</span><span>9:16</span></div>
           <div className="mx-auto w-full max-w-[calc(48svh*9/16)] lg:max-w-none"><MediaFrame>
             <img className="absolute inset-0 size-full object-cover" draggable={false} alt={hold ? "原始画面" : "画面编辑预览"} src={preview.data ? urls.lookFile(hold ? preview.data.original : preview.data.beauty) : defaultImage} />
-            {!hold && <GraphicsCanvas settings={editor.design} fonts={editor.fonts} selected={selected} onSelect={(id) => { setSelected(id); setTab(id === "subtitle" || editor.design.elements.find((item) => item.id === id)?.type === "text" ? "text" : "stickers") }} onMove={(id, x, y) => update({ x, y }, id)} time={time} editing={!playing} />}
+            {!hold && <GraphicsCanvas settings={editor.design} fonts={editor.fonts} selected={selected} subtitleText={shownSubtitle}
+              onSelect={(id) => { setSelected(id); if (id) setTab(id === "subtitle" || editor.design.elements.find((item) => item.id === id)?.type === "text" ? "text" : "stickers") }} onMove={(id, x, y) => update({ x, y }, id)} time={time} editing={!playing} />}
             {(preview.status === "loading" || preview.status === "idle") && <div className="pointer-events-none absolute right-3 bottom-3 rounded-full bg-black/50 p-2"><Loader2 className="size-4 animate-spin text-white" aria-label="更新背景预览" /></div>}
           </MediaFrame></div>
           <div className="flex items-center gap-3"><Button variant="outline" size="icon" className="shrink-0 rounded-full" aria-label={playing ? "暂停动画" : "播放动画"} onClick={() => setPlaying(!playing)}>{playing ? <Pause /> : <Play />}</Button><input className="min-w-0 flex-1 accent-[var(--foreground)]" type="range" min={0} max={timeline} step={.05} value={time} onChange={(e) => seek(Number(e.target.value))} aria-label="预览时间" /><span className="w-20 text-right text-xs tabular-nums text-muted-foreground">{time.toFixed(1)} / {timeline.toFixed(1)}s</span></div>
           <div className="flex flex-wrap justify-center gap-2"><Button variant="outline" size="sm" className="rounded-full" onPointerDown={() => setHold(true)} onPointerUp={() => setHold(false)} onPointerLeave={() => setHold(false)} onPointerCancel={() => setHold(false)}><Eye />按住看原片</Button><Button variant="outline" size="sm" className="rounded-full" disabled={previewBusy} onClick={() => void renderPreview()}>{previewBusy ? <Loader2 className="animate-spin" /> : <Film />}生成前 6 秒预览</Button></div>
-          <p className="text-center text-xs text-muted-foreground">拖动画面中的文字或标识调整位置，选中后也可用方向键微调。</p>
+          <p className="text-center text-xs text-muted-foreground">先点击文字或标识显示选框，再拖动调整；点击空白处或按 Esc 收起选框。</p>
           {(fontError || preview.error) && <p role="alert" className="text-center text-xs text-destructive">{fontError || preview.error}</p>}
         </div>
       </div>}

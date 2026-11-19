@@ -351,12 +351,37 @@ def delete_script(batch: str, sid: str):
     return {"ok": True}
 
 
+@app.put("/api/batches/{batch}/scripts/{sid}/subtitles")
+def save_subtitles(batch: str, sid: str, data: dict = Body(...)):
+    try:
+        return {"script": scriptmod.update_subtitles(batch, sid, data.get("changes"))}
+    except FileNotFoundError:
+        raise HTTPException(404, "这条成片没有对应的剪辑脚本")
+    except scriptmod.SubtitleConflict as e:
+        raise HTTPException(409, str(e))
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
 @app.post("/api/batches/{batch}/scripts/{sid}/render")
-def render_script(batch: str, sid: str):
-    s = scriptmod.load(batch, sid)
+def render_script(batch: str, sid: str, data: dict | None = Body(default=None)):
+    try:
+        s = scriptmod.load(batch, sid)
+    except FileNotFoundError:
+        raise HTTPException(404, "找不到这条成片对应的剪辑脚本，无法重新出片")
+    options = {}
+    if data is not None:
+        from jh import graphics, look
+
+        if not isinstance(data.get("look"), dict) or not isinstance(data.get("graphics"), dict):
+            raise HTTPException(400, "画面设置无效")
+        try:
+            options = {"settings": look.normalize(data["look"]), "design": graphics.normalize(data["graphics"], validate_fonts=True)}
+        except (KeyError, TypeError, ValueError) as e:
+            raise HTTPException(400, f"画面设置无效：{e}")
 
     def run(p):
-        out = render.render(s, p, on_stage=p.set_stage)
+        out = render.render(s, p, on_stage=p.set_stage, **options)
         s2 = scriptmod.load(batch, sid)
         s2["status"] = "rendered"
         scriptmod.save(s2)
@@ -375,7 +400,7 @@ def render_all(batch: str, data: dict = Body(default={})):
             continue
         s["status"] = "approved"
         scriptmod.save(s)
-        queued.append(render_script(batch, s["id"]))
+        queued.append(render_script(batch, s["id"], None))
     return queued
 
 
@@ -442,6 +467,17 @@ def graphics_preview(data: dict = Body(...)):
         return graphics.preview(data, jobs.list())
     except (ValueError, RuntimeError, FileNotFoundError) as e:
         raise HTTPException(400, str(e))
+
+
+@app.post("/api/graphics/caption")
+def caption_preview(data: dict = Body(...)):
+    text = data.get("text", "")
+    if not isinstance(text, str) or len(text) > 2000:
+        raise HTTPException(400, "预览字幕最多 2000 字")
+    limit = config.load()["style"]["subtitle"]["max_chars_per_line"]
+    chunks = render.timed_chunks(text, 0, 6, limit) if text.strip() else []
+    return {"chunks": [{"start": start, "end": end, "text": render.wrap_line(text, limit).replace(r"\N", "\n") if render.sub_lines() >= 2 else text.replace(" ", "")}
+                       for start, end, text in chunks]}
 
 
 @app.get("/api/graphics/preview/{key}.mp4")

@@ -673,7 +673,7 @@ Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
     path.write_text(header + "\n".join(ev) + "\n", encoding="utf-8")
 
 
-def render(script: dict, progress=None, on_stage=None) -> Path:
+def render(script: dict, progress=None, on_stage=None, *, settings: dict | None = None, design: dict | None = None) -> Path:
     work = config.data_root() / "renders" / script["batch"] / script["id"]
     if work.exists():
         shutil.rmtree(work)
@@ -686,8 +686,8 @@ def render(script: dict, progress=None, on_stage=None) -> Path:
     out_dir.mkdir(parents=True, exist_ok=True)
     out = out_dir / f"{script['id']}.mp4"
     cover = None
-    settings = look.current()
-    design = graphics.current()
+    settings = look.current() if settings is None else look.normalize(settings)
+    design = graphics.current() if design is None else graphics.normalize(design, validate_fonts=True)
     ccfg = config.load()["render"].get("cover") or {}
     if ccfg.get("enabled") and script.get("cover"):
         if on_stage:

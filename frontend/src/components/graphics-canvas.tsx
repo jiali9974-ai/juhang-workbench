@@ -7,17 +7,17 @@ export function StickerShape({ icon, color }: { icon: GraphicElement["icon"]; co
   return <svg viewBox="0 0 100 100" className="size-full" aria-hidden="true"><path d={SHAPES[icon]} fill={color} /></svg>
 }
 
-export function GraphicsCanvas({ settings, fonts, selected, onSelect, onMove, time, editing = true }: {
-  settings: GraphicsSettings; fonts: EditorFont[]; selected: string; onSelect: (id: string) => void
-  onMove: (id: string, x: number, y: number) => void; time: number; editing?: boolean
+export function GraphicsCanvas({ settings, fonts, selected, onSelect, onMove, time, editing = true, subtitleText = "这是口播字幕预览" }: {
+  settings: GraphicsSettings; fonts: EditorFont[]; selected: string | null; onSelect: (id: string | null) => void
+  onMove: (id: string, x: number, y: number) => void; time: number; editing?: boolean; subtitleText?: string
 }) {
   const canvas = useRef<HTMLDivElement>(null)
   const drag = useRef<{ id: string; x: number; y: number; px: number; py: number } | null>(null)
-  const layers: Layer[] = [{ ...settings.subtitle, id: "subtitle", type: "text", text: "这是口播字幕预览" }, ...settings.elements]
+  const layers: Layer[] = [{ ...settings.subtitle, id: "subtitle", type: "text", text: subtitleText }, ...settings.elements]
   function start(event: PointerEvent<HTMLButtonElement>, layer: Layer) {
     event.stopPropagation()
     if (!editing) return
-    onSelect(layer.id)
+    if (selected !== layer.id) { onSelect(layer.id); return }
     event.currentTarget.setPointerCapture(event.pointerId)
     drag.current = { id: layer.id, x: layer.x, y: layer.y, px: event.clientX, py: event.clientY }
   }
@@ -28,11 +28,11 @@ export function GraphicsCanvas({ settings, fonts, selected, onSelect, onMove, ti
       Math.max(0, Math.min(100, current.y + (event.clientY - current.py) / bounds.height * 100)))
   }
   return (
-    <div ref={canvas} className="absolute inset-0" style={{ containerType: "inline-size" }} aria-label="画面元素预览">
-      {editing && <div className="pointer-events-none absolute inset-x-[5%] inset-y-[5%] rounded-sm border border-dashed border-white/20" />}
+    <div ref={canvas} className="absolute inset-0" style={{ containerType: "inline-size" }} aria-label="画面元素预览"
+      onPointerDown={(event) => { if (editing && event.target === event.currentTarget) onSelect(null) }}>
       {layers.map((layer) => {
         const element = layer.id === "subtitle" ? null : layer as GraphicElement
-        if (!layer.enabled || (element && (time < element.start || (element.end !== null && time >= element.end)))) return null
+        if (!layer.enabled || (layer.id === "subtitle" && !layer.text) || (element && (time < element.start || (element.end !== null && time >= element.end)))) return null
         const [scale, dy, angle, alpha] = element ? pose(element.animation, Math.max(0, time - element.start)) : [1, 0, 0, 1]
         const font = fonts.find((font) => font.id === layer.font_id)
         const isSticker = element?.type === "sticker"
@@ -40,15 +40,16 @@ export function GraphicsCanvas({ settings, fonts, selected, onSelect, onMove, ti
         return (
           <button key={layer.id} type="button" aria-label={`选择${layer.id === "subtitle" ? "口播字幕" : element?.type === "sticker" ? "标识" : "文字"}：${layer.text || (element?.type === "sticker" ? element.icon : "未命名文字")}`}
             onPointerDown={(event) => start(event, layer)} onPointerMove={move} onPointerUp={() => { drag.current = null }} onPointerCancel={() => { drag.current = null }}
-            onClick={() => onSelect(layer.id)} onKeyDown={(event) => {
-              if (!editing || !["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return
+            onClick={() => { if (editing) onSelect(layer.id) }} onKeyDown={(event) => {
+              if (event.key === "Escape") { onSelect(null); return }
+              if (!editing || selected !== layer.id || !["ArrowLeft", "ArrowRight", "ArrowUp", "ArrowDown"].includes(event.key)) return
               event.preventDefault(); onMove(layer.id, Math.max(0, Math.min(100, layer.x + (event.key === "ArrowRight" ? 1 : event.key === "ArrowLeft" ? -1 : 0))),
                 Math.max(0, Math.min(100, layer.y + (event.key === "ArrowDown" ? 1 : event.key === "ArrowUp" ? -1 : 0))))
             }}
             className="absolute touch-none select-none border-0 bg-transparent p-0 leading-none outline-none"
             style={{ left: `${layer.x}%`, top: `calc(${layer.y}% + ${dy * layer.size / 1440 * 100}cqw)`,
               transform: `translate(-50%, -50%) rotate(${-((element?.rotation ?? 0) + angle)}deg) scale(${scale})`,
-              opacity: alpha * (element?.opacity ?? 1), cursor: editing ? "move" : "default", maxWidth: "none" }}>
+              opacity: alpha * (element?.opacity ?? 1), cursor: editing ? selected === layer.id ? "move" : "pointer" : "default", maxWidth: "none" }}>
             <span className={`relative block ${editing && selected === layer.id ? "outline-2 outline-offset-4 outline-white" : ""}`}
               style={isSticker ? { width: `${layer.size / 1440 * 100}cqw`, height: `${layer.size / 1440 * 100}cqw` } : undefined}>
               {isSticker && <StickerShape icon={element.icon} color={layer.color} />}

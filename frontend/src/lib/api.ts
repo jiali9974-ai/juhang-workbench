@@ -250,10 +250,14 @@ export const api = {
   scripts: (b: string) => request<Script[]>(`/api/batches/${e(b)}/scripts`),
   saveScript: (s: Script) =>
     request<{ ok: boolean }>(`/api/batches/${e(s.batch)}/scripts/${e(s.id)}`, { method: "PUT", body: JSON.stringify(s) }),
+  saveSubtitles: (b: string, id: string, changes: { index: number; clip: string; start: number; end: number; previous: string; subtitle: string }[]) =>
+    request<{ script: Script }>(`/api/batches/${e(b)}/scripts/${e(id)}/subtitles`, { method: "PUT", body: JSON.stringify({ changes }) }),
   deleteScript: (b: string, id: string) => request<{ ok: boolean }>(`/api/batches/${e(b)}/scripts/${e(id)}`, { method: "DELETE" }),
   transcribe: (b: string) => request<Job>(`/api/batches/${e(b)}/transcribe`, { method: "POST" }),
   generate: (b: string) => request<Job>(`/api/batches/${e(b)}/generate`, { method: "POST" }),
   render: (b: string, id: string) => request<Job>(`/api/batches/${e(b)}/scripts/${e(id)}/render`, { method: "POST" }),
+  renderWithSettings: (b: string, id: string, look: LookSettings, graphics: GraphicsSettings) =>
+    request<Job>(`/api/batches/${e(b)}/scripts/${e(id)}/render`, { method: "POST", body: JSON.stringify({ look, graphics }) }),
   renderAll: (b: string, all = false) => request<Job[]>(`/api/batches/${e(b)}/render_all`, { method: "POST", body: JSON.stringify({ all }) }),
   /** 美颜调色强度（批量出片都用这个） */
   getLook: () => request<{ settings: LookSettings; defaults: LookSettings }>("/api/look"),
@@ -261,8 +265,9 @@ export const api = {
   saveGraphics: (settings: GraphicsSettings) => request<{ settings: GraphicsSettings }>("/api/graphics", { method: "PUT", body: JSON.stringify(settings) }),
   uploadFont: (file: File) => request<{ font: EditorFont; fonts: EditorFont[] }>(`/api/fonts?filename=${e(file.name)}`, { method: "POST", body: file, headers: { "Content-Type": "application/octet-stream" } }),
   deleteFont: (id: string) => request<{ ok: boolean; fonts: EditorFont[] }>(`/api/fonts/${e(id)}`, { method: "DELETE" }),
-  graphicsPreview: (settings: GraphicsSettings, source: Pick<OutputVideo, "batch" | "id"> | null, look: LookSettings) =>
-    request<{ url: string }>("/api/graphics/preview", { method: "POST", body: JSON.stringify({ settings, source, look }) }),
+  graphicsPreview: (settings: GraphicsSettings, source: Pick<OutputVideo, "batch" | "id"> | null, look: LookSettings, subtitle?: string) =>
+    request<{ url: string }>("/api/graphics/preview", { method: "POST", body: JSON.stringify({ settings, source, look, subtitle }) }),
+  captionPreview: (text: string) => request<{ chunks: { start: number; end: number; text: string }[] }>("/api/graphics/caption", { method: "POST", body: JSON.stringify({ text }) }),
   saveLook: (s: LookSettings) => request<{ settings: LookSettings }>("/api/look", { method: "PUT", body: JSON.stringify(s) }),
   lookPreview: async (source: Pick<OutputVideo, "batch" | "id"> | null, kind: "face" | "watch", settings: LookSettings) => {
     const result = await request<{ kind: "face" | "watch"; original: string; beauty: string; source?: "cover" | "default"; fallback?: boolean }>(

@@ -26,6 +26,7 @@ import { followTask, getRoute, go } from "@/hooks/use-route"
 import { api, urls, type Line, type Role, type Script } from "@/lib/api"
 import { lineDuration, ROLE, scriptDuration, shortClip, subtitleChars, subtitleTooLong, tsec } from "@/lib/format"
 import { cn } from "@/lib/utils"
+import { PAGE_CONTAINER } from "@/lib/layout"
 
 type Preview = { kind: "none" } | { kind: "output" } | { kind: "source"; key: string }
 
@@ -214,7 +215,7 @@ export function ScriptEditor({ batch, id }: { batch: string; id: string }) {
   const pvIndex = preview.kind === "source" ? keys.indexOf(preview.key) : -1
 
   return (
-    <div className="mx-auto w-full max-w-[1480px] px-6 pt-5 pb-40 md:px-8">
+    <div className={`${PAGE_CONTAINER} [&_button]:rounded-full`}>
       <button onClick={back} className="group mb-3 inline-flex items-center gap-1.5 text-sm text-muted-foreground transition-colors hover:text-foreground">
         <ArrowLeft className="size-4 transition-transform group-hover:-translate-x-0.5" />返回 {batch}
       </button>

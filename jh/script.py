@@ -21,9 +21,16 @@ from __future__ import annotations
 
 import json
 import re
+import threading
 from pathlib import Path
 
 from . import config
+
+LOCK = threading.RLock()
+
+
+class SubtitleConflict(ValueError):
+    pass
 
 
 def _extract_json(text: str) -> dict:
@@ -125,8 +132,34 @@ _LEGACY_AUDIO_FIELDS = {"voice_mode", "tts_engine", "voice_source", "voice_ref",
 def save(script: dict) -> Path:
     script = {k: v for k, v in script.items() if k not in _LEGACY_AUDIO_FIELDS}
     p = scripts_dir(script["batch"]) / f"{script['id']}.json"
-    p.write_text(json.dumps(script, ensure_ascii=False, indent=1), encoding="utf-8")
+    with LOCK:
+        p.write_text(json.dumps(script, ensure_ascii=False, indent=1), encoding="utf-8")
     return p
+
+
+def update_subtitles(batch: str, sid: str, changes: list[dict]) -> dict:
+    """只改指定句子的显示字幕，保留音频剪辑、时间轴及脚本的其他字段。"""
+    if not isinstance(changes, list) or len(changes) > 1000:
+        raise ValueError("字幕修改格式无效")
+    with LOCK:
+        script = load(batch, sid)
+        seen = set()
+        for change in changes:
+            if not isinstance(change, dict):
+                raise ValueError("字幕修改格式无效")
+            index, text = change.get("index"), change.get("subtitle")
+            if type(index) is not int or index < 0 or index >= len(script["lines"]) or index in seen:
+                raise ValueError("字幕句子编号无效")
+            if not isinstance(text, str) or len(text) > 2000:
+                raise ValueError("每句字幕最多 2000 字")
+            seen.add(index)
+            line = script["lines"][index]
+            if any(line.get(field) != change.get(field) for field in ("clip", "start", "end")) or line.get("subtitle", "") != change.get("previous"):
+                raise SubtitleConflict("这条脚本已在其他位置修改，请重新载入字幕后再保存")
+        for change in changes:
+            script["lines"][change["index"]]["subtitle"] = change["subtitle"]
+        save(script)
+        return script
 
 
 def load(batch: str, script_id: str) -> dict:

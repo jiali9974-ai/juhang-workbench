@@ -28,6 +28,7 @@ import { followTask, getRoute, go, type BatchTab } from "@/hooks/use-route"
 import { api, urls, type Batch, type Clip, type Script, type Transcript } from "@/lib/api"
 import { minutes, mmss, shortClip, tsec } from "@/lib/format"
 import { cn } from "@/lib/utils"
+import { PAGE_CONTAINER, PAGE_TITLE } from "@/lib/layout"
 
 interface Data {
   batch: Batch
@@ -118,15 +119,15 @@ export function BatchPage({ batch, tab }: { batch: string; tab: BatchTab }) {
   ]
 
   return (
-    <div className="mx-auto w-full max-w-[1400px] px-6 pt-6 pb-40 md:px-8">
+    <div className={PAGE_CONTAINER}>
       {/* 标题 */}
       <div className="flex flex-wrap items-end justify-between gap-4">
         <div>
           <button onClick={() => go({ page: "projects" })} className="text-xs text-muted-foreground transition-colors hover:text-foreground">← 全部项目</button>
-          <h1 className="mt-1 text-3xl font-bold tracking-wide">{b.batch}</h1>
-          <div className="mt-1 text-sm text-muted-foreground">{b.clips ? `${b.clips} 条素材 · ${minutes(totalSec)} 分钟` : "还没有素材"}{queue.busy && " · 上传中…"}</div>
+          <h1 className={`mt-3 ${PAGE_TITLE}`}>素材与脚本</h1>
+          <div className="mt-3 text-sm text-muted-foreground">{b.batch} · {b.clips ? `${b.clips} 条素材 · ${minutes(totalSec)} 分钟` : "还没有素材"}{queue.busy && " · 上传中…"}</div>
         </div>
-        <div className="flex flex-wrap gap-2">
+        <div className="flex flex-wrap gap-2 [&_button]:rounded-full">
           <DeleteProject kind="batch" id={batch} name={b.batch} current />
           <Button variant="outline" size="lg" onClick={addMaterial}><Plus />添加素材</Button>
           <Button variant="outline" size="lg" onClick={() => go({ page: "beauty", batch })} disabled={!b.clips}><Wand2 />画面编辑</Button>
@@ -190,11 +191,11 @@ export function BatchPage({ batch, tab }: { batch: string; tab: BatchTab }) {
       {/* 步骤条 */}
       <Stagger className="mt-6 grid grid-cols-2 gap-3 lg:grid-cols-4">
         {steps.map((s, i) => (
-          <StaggerItem key={s.title} className="soft-shadow relative overflow-hidden rounded-xl border bg-card px-4 py-3.5">
+          <StaggerItem key={s.title} className="relative overflow-hidden rounded-2xl border bg-card px-4 py-3.5">
             <div className="flex items-center gap-2.5">
               <span className={cn(
                 "grid size-6 place-items-center rounded-full border text-xs",
-                s.done ? "border-primary bg-primary font-bold text-primary-foreground" : s.doing ? "border-primary text-gold-ink" : "text-muted-foreground",
+                s.done ? "border-foreground bg-foreground font-bold text-background" : s.doing ? "border-foreground text-foreground" : "text-muted-foreground",
               )}>
                 {s.done ? <motion.span initial={{ scale: 0, rotate: -90 }} animate={{ scale: 1, rotate: 0 }} transition={{ type: "spring", stiffness: 400, damping: 18, delay: 0.25 + i * 0.08 }}><Check className="size-3.5" /></motion.span> : i + 1}
               </span>
@@ -202,14 +203,14 @@ export function BatchPage({ batch, tab }: { batch: string; tab: BatchTab }) {
               <s.icon className="ml-auto size-4 text-muted-foreground" />
             </div>
             <div className="mt-1.5 pl-[34px] text-xs text-muted-foreground">{s.desc}</div>
-            <GrowBar value={s.p} className="absolute bottom-0 left-0 h-[3px] bg-primary" />
+            <GrowBar value={s.p} className="absolute bottom-0 left-0 h-[3px] bg-foreground" />
           </StaggerItem>
         ))}
       </Stagger>
 
       {/* 统计 */}
       <Stagger className="mt-3 grid grid-cols-2 gap-3 lg:grid-cols-[1.7fr_1fr_1fr_1fr]">
-        <StaggerItem className="soft-shadow col-span-2 rounded-xl border bg-card px-4 py-3.5 lg:col-span-1">
+        <StaggerItem className="col-span-2 rounded-2xl border bg-card px-4 py-3.5 lg:col-span-1">
           <div className="text-xs text-muted-foreground">素材语种（已识别部分）</div>
           {speech ? (
             <>
@@ -229,9 +230,9 @@ export function BatchPage({ batch, tab }: { batch: string; tab: BatchTab }) {
 
       {/* 标签页 */}
       <Tabs value={tab} onValueChange={(v) => go({ page: "batch", batch, tab: v as BatchTab })} className="mt-7">
-        <TabsList variant="line" className="h-10 w-full justify-start gap-2 rounded-none border-b p-0">
-          <TabsTrigger value="scripts" className="flex-none px-3">剪辑脚本<span className="ml-1.5 rounded-full bg-muted px-1.5 text-[11px] tabular">{scripts.length}</span></TabsTrigger>
-          <TabsTrigger value="clips" className="flex-none px-3">素材库<span className="ml-1.5 rounded-full bg-muted px-1.5 text-[11px] tabular">{clips.length}</span></TabsTrigger>
+        <TabsList className="h-auto w-fit max-w-full justify-start gap-1 rounded-full bg-muted p-1">
+          <TabsTrigger value="scripts" className="flex-none rounded-full px-4 py-2">剪辑脚本<span className="ml-1.5 rounded-full bg-muted px-1.5 text-[11px] tabular">{scripts.length}</span></TabsTrigger>
+          <TabsTrigger value="clips" className="flex-none rounded-full px-4 py-2">素材库<span className="ml-1.5 rounded-full bg-muted px-1.5 text-[11px] tabular">{clips.length}</span></TabsTrigger>
         </TabsList>
       </Tabs>
       <AnimatePresence mode="wait" initial={false}>
@@ -277,7 +278,7 @@ function RegenerateButton({ onConfirm, disabled }: { onConfirm: () => void; disa
 
 function Stat({ label, value, unit, decimals = 0 }: { label: string; value: number; unit: string; decimals?: number }) {
   return (
-    <StaggerItem className="soft-shadow rounded-xl border bg-card px-4 py-3.5">
+    <StaggerItem className="rounded-2xl border bg-card px-4 py-3.5">
       <div className="text-xs text-muted-foreground">{label}</div>
       <div className="mt-1 text-2xl font-bold tabular"><CountUp value={value} decimals={decimals} /><span className="ml-1 text-sm font-normal text-muted-foreground">{unit}</span></div>
     </StaggerItem>
@@ -311,7 +312,7 @@ function ScriptGrid({ batch, scripts }: { batch: string; scripts: Script[] }) {
         const cover = s.has_output ? urls.outputThumb(batch, s.id) : first ? urls.thumb(batch, first.clip, (first.start + first.end) / 2) : ""
         const zh = s.lines.filter((l) => l.src_lang === "zh").length
         return (
-          <StaggerItem key={s.id} className="lift group soft-shadow overflow-hidden rounded-xl border bg-card hover:border-primary/40">
+          <StaggerItem key={s.id} className="lift group overflow-hidden rounded-2xl border bg-card transition hover:border-foreground/30">
             <button
               className="relative block aspect-[3/4] w-full overflow-hidden bg-muted text-left"
               onClick={() => go({ page: "script", batch, id: s.id })}
@@ -337,7 +338,7 @@ function ScriptGrid({ batch, scripts }: { batch: string; scripts: Script[] }) {
                 <span>保留原声</span>
                 {zh > 0 && <LangTag lang="zh" className="ml-auto" />}
               </div>
-              <div className="mt-2.5 flex gap-2">
+              <div className="mt-2.5 flex gap-2 [&_button]:rounded-full [&_a]:rounded-full">
                 <Button size="sm" variant="secondary" className="flex-1" onClick={() => go({ page: "script", batch, id: s.id })}>审核</Button>
                 {s.has_output ? (
                   <Button size="sm" variant="outline" className="flex-1" asChild>

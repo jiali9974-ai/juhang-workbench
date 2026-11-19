@@ -226,16 +226,19 @@ def preview(data: dict, active_jobs: list[dict]) -> dict:
     from . import cancellation, look, render
 
     settings = normalize(data.get("settings", current()), validate_fonts=True)
+    subtitle = data.get("subtitle", "这是口播字幕预览")
+    if not isinstance(subtitle, str) or len(subtitle) > 2000:
+        raise ValueError("预览字幕最多 2000 字")
     source = look.preview_source(data.get("source"), "face", data.get("look"), active_jobs)
     image = look._preview_dir() / source["beauty"]
     renderer = hashlib.sha256(Path(__file__).read_bytes() + Path(render.__file__).read_bytes()).hexdigest()
-    key = hashlib.sha256(json.dumps([settings, source["beauty"], renderer], sort_keys=True).encode()).hexdigest()[:24]
+    key = hashlib.sha256(json.dumps([settings, source["beauty"], subtitle, renderer], sort_keys=True).encode()).hexdigest()[:24]
     directory = config.data_root() / "preview" / "graphics" / key
     with PREVIEW_LOCK:
         directory.mkdir(parents=True, exist_ok=True)
         output = directory / "preview.mp4"
         if not output.is_file():
-            segment = render.Segment(image, 0, 6, subs=[(0, 6, "这是口播字幕预览")])
+            segment = render.Segment(image, 0, 6, subs=render.timed_chunks(subtitle, 0, 6, config.load()["style"]["subtitle"]["max_chars_per_line"]))
             render.build_ass([segment], 6, directory / "preview.ass", design=settings)
             fonts.snapshot(directory / "fonts")
             result = cancellation.run_process([
