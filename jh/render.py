@@ -715,6 +715,14 @@ def render(script: dict, progress=None, on_stage=None) -> Path:
             embed_cover(pending, cover_jpg)
         cancellation.check()
         pending.replace(out)
+        # 只在成片成功发布后更新封面说明；取消重生成时保留旧成片的说明。
+        selection_file = out_dir / f"{script['id']}_封面选择.json"
+        check_file = work / "cover_check.json"
+        if cover and check_file.is_file():
+            chosen = json.loads(check_file.read_text(encoding="utf-8")).get("chosen", {})
+            selection_file.write_text(json.dumps(chosen, ensure_ascii=False, indent=1), encoding="utf-8")
+        else:
+            selection_file.unlink(missing_ok=True)
         if cover:
             for suffix in ("_封面.jpg", "_封面原图.jpg", "_封面原图.json"):
                 image = work / f"{script['id']}{suffix}"

@@ -40,8 +40,15 @@ def list_outputs(active_jobs: list[dict] | None = None) -> list[dict]:
                 continue
             stat = path.stat()
             if stat.st_size:
-                result.append({"batch": batch, "id": sid, "title": (script or {}).get("title") or sid,
-                               "updated": stat.st_mtime, "size": stat.st_size})
+                item = {"batch": batch, "id": sid, "title": (script or {}).get("title") or sid,
+                        "updated": stat.st_mtime, "size": stat.st_size}
+                try:
+                    selection = json.loads(path.with_name(f"{sid}_封面选择.json").read_text(encoding="utf-8"))
+                    if isinstance(selection, dict) and isinstance(selection.get("note"), str) and selection["note"]:
+                        item["cover_note"] = selection["note"]
+                except (OSError, ValueError):
+                    pass  # 缺少旧版封面说明、或说明损坏，不影响成片显示。
+                result.append(item)
         except (OSError, ValueError):
             continue
     return sorted(result, key=lambda item: (-item["updated"], item["batch"], item["id"]))
@@ -70,7 +77,8 @@ def delete_output(batch: str, sid: str, active_jobs: list[dict] | None = None) -
     original = script_path.read_text(encoding="utf-8") if script_path and script_path.is_file() else None
     script = json.loads(original) if original else None
     deletion.delete_children([(source.parent, source.name), (source.parent, f"{sid}_封面.jpg"),
-                              (source.parent, f"{sid}_封面原图.jpg"), (source.parent, f"{sid}_封面原图.json")])
+                              (source.parent, f"{sid}_封面原图.jpg"), (source.parent, f"{sid}_封面原图.json"),
+                              (source.parent, f"{sid}_封面选择.json")])
     if script and script.get("status") == "rendered":
         script["status"] = "approved"
         script_path.write_text(json.dumps(script, ensure_ascii=False, indent=1), encoding="utf-8")

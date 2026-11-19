@@ -174,6 +174,7 @@ export interface OutputVideo {
   title: string
   updated: number
   size: number
+  cover_note?: string
 }
 
 const legacyOutputVersions = new Map<string, number>()

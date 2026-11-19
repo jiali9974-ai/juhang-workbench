@@ -1,3 +1,4 @@
+import json
 import sys
 import tempfile
 import threading
@@ -129,11 +130,14 @@ class JobCancellationTests(unittest.TestCase):
             old_cover.write_bytes(b"old-cover")
             old_source = output / "片_封面原图.jpg"
             old_source.write_bytes(b"old-source")
+            selection = output / "片_封面选择.json"
+            selection.write_text('{"mode":"natural","note":"旧封面说明"}', encoding="utf-8")
 
             def make_cover(segs, lines, destination, **kwargs):
                 from PIL import Image
                 Image.new("RGB", (4, 4)).save(destination)
                 kwargs["source_out"].write_bytes(b"new-source")
+                destination.with_name("cover_check.json").write_text('{"chosen":{"mode":"smile","note":""}}')
                 return destination
 
             def stop(segs, work, pending, *args, **kwargs):
@@ -157,7 +161,8 @@ class JobCancellationTests(unittest.TestCase):
             self.assertEqual(target.read_bytes(), b"old-completed-video")
             self.assertEqual(old_cover.read_bytes(), b"old-cover")
             self.assertEqual(old_source.read_bytes(), b"old-source")
-            self.assertEqual(set(output.iterdir()), {target, old_cover, old_source})
+            self.assertIn("旧封面说明", selection.read_text(encoding="utf-8"))
+            self.assertEqual(set(output.iterdir()), {target, old_cover, old_source, selection})
 
             # 同一路径正常完成后，视频和封面一起发布，临时目录不会进入成片库。
             with patch.object(render.config, "data_root", return_value=root / "data"), \
@@ -174,7 +179,8 @@ class JobCancellationTests(unittest.TestCase):
             self.assertEqual(target.read_bytes(), b"new-completed-video")
             self.assertEqual(old_source.read_bytes(), b"new-source")
             self.assertNotEqual(old_cover.read_bytes(), b"old-cover")
-            self.assertEqual(set(output.iterdir()), {target, old_cover, old_source})
+            self.assertEqual(json.loads(selection.read_text(encoding="utf-8"))["mode"], "smile")
+            self.assertEqual(set(output.iterdir()), {target, old_cover, old_source, selection})
 
 
 if __name__ == "__main__":

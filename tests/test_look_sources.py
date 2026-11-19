@@ -144,17 +144,18 @@ class LookSourceTests(unittest.TestCase):
         chosen = json.loads(destination.with_name("cover_check.json").read_text(encoding="utf-8"))["chosen"]
         self.assertEqual((chosen["t"], chosen["zoom"]), (3.75, 1.15))
 
-    def test_cover_fallback_records_and_saves_actual_frame_time(self):
+    def test_missing_qualified_face_never_falls_back_to_an_arbitrary_frame(self):
         seg = SimpleNamespace(clip=self.root / "source.MOV", v_start=2.2, v_dur=.8, zoom=1.05)
         destination = self.root / "cover.png"
         source_out = self.root / "raw.jpg"
         with patch.object(cover, "_birefnet", return_value=object()), \
              patch.object(cover, "candidates", return_value=([], {})), patch.object(cover, "make_cover"), \
              patch.object(look_sources, "save") as save:
-            cover.make_best_cover([seg], [], destination, settings=self.off, source_out=source_out)
-        save.assert_called_once_with(seg.clip, 2.6, 1.05, source_out)
-        chosen = json.loads(destination.with_name("cover_check.json").read_text(encoding="utf-8"))["chosen"]
-        self.assertEqual(chosen["t"], 2.6)
+            with self.assertRaisesRegex(RuntimeError, "未找到看向镜头"):
+                cover.make_best_cover([seg], [], destination, settings=self.off, source_out=source_out)
+        save.assert_not_called()
+        record = json.loads(destination.with_name("cover_check.json").read_text(encoding="utf-8"))
+        self.assertNotIn("chosen", record)
 
     def test_saved_source_has_no_beauty_and_keeps_lighting_for_future_previews(self):
         clip, destination = self.root / "source.MOV", self.root / "saved.jpg"
