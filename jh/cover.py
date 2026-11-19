@@ -3,10 +3,10 @@
 第一行白字黑边（卖点），第二行绿字黑边 + 绿色下划线（悬念）。封面会放在成片最开头的一两帧，同时另存一张 jpg 方便手动上传。
 
 做封面时就把关（不是做完再挑）：
-- 选帧：按原始视频 PTS 每约 0.2 秒抽样，用 Face Landmarker 的表情系数、虹膜位置和头部姿态判断看镜头与自然微笑。
+- 选帧：按原始视频 PTS 每约 0.2 秒抽样，用 Face Landmarker 的表情系数、虹膜位置和头部姿态判断看镜头与不露齿的闭嘴微笑。
   微笑帧不够时扩大到同一素材的未剪辑部分，并在候选瞬间附近约每 0.04 秒细找，优先稳定的正脸微笑。
   找不到合适微笑时只接受看镜头的自然表情并记录说明，不用侧脸、目光移开的帧兜底；
-- 做封面：按分数从高到低，一帧一帧在美颜调色后的高清画面上再检查一遍脸、再检查抠图（脸完整在人像里、人像大小正常），
+- 做封面：按分数从高到低，在原始高清帧上复查眼神、表情与嘴唇闭合，再应用美颜调色并检查抠图（脸完整、人像大小正常），
   任何一项不合格就换下一帧重做，检查结果记在 cover_check.json；
 - 抠图只要人：只使用 BiRefNet-portrait 人像抠图（含头发细节），不可用时明确报错，
   下巴以上不限制，下巴以下只保留身体骨架范围（躯干、手臂、手）里面的部分，手里拿的表盒、桌面这些人以外的东西都不抠。
@@ -325,8 +325,9 @@ def _scan(clip: Path, start: float, dur: float, zoom: float, step: float, skip: 
     out, next_time = [], start
     with av.open(str(clip)) as container:
         video = container.streams.video[0]
-        origin = float((video.start_time or 0) * video.time_base)
-        container.seek(int((start + origin) / video.time_base), stream=video, backward=True)
+        origin = float(container.start_time or 0) / av.time_base
+        seek_time = max(video.start_time or 0, int((start + origin) / video.time_base))
+        container.seek(seek_time, stream=video, backward=True)
         for frame in container.decode(video):
             cancellation.check()
             if frame.pts is None:
@@ -383,9 +384,19 @@ def candidates(segs, step: float = 0.2, want: int = 6) -> tuple[list[dict], dict
             out += _scan(Path(clip), 0.0, media.probe(Path(clip)).duration, talk, 0.25, spans)
     # 在最有希望的几个瞬间附近细找，捕捉自然微笑，避免只抽到说话嘴型。
     ref = _ref(out)
-    promising = sorted(out, key=lambda m: (not face_problems(m, ref), cover_faces.smiling(m), face_score(m, ref)), reverse=True)
+    # 微笑过渡到闭嘴的瞬间可能落在两个粗采样帧之间；精扫种子允许嘴张开，
+    # 但眼神、头部朝向等条件仍需通过，最终选帧必须严格闭嘴、不露齿。
+    camera = [m for m in out if not [problem for problem in face_problems(m, ref) if problem != "嘴唇未闭合或可见牙齿"]]
+    promising = sorted(camera, key=lambda m: (m["smile_confidence"], face_score(m, ref)), reverse=True)
+    neutral = sorted((m for m in out if not face_problems(m, ref)), key=lambda m: face_score(m, ref), reverse=True)
     centers = []
     for m in promising:
+        if any(old["clip"] == m["clip"] and abs(old["t"] - m["t"]) < .6 for old in centers):
+            continue
+        centers.append(m)
+        if len(centers) >= 4:
+            break
+    for m in neutral:
         if any(old["clip"] == m["clip"] and abs(old["t"] - m["t"]) < .6 for old in centers):
             continue
         centers.append(m)
@@ -411,7 +422,7 @@ def candidates(segs, step: float = 0.2, want: int = 6) -> tuple[list[dict], dict
 
 def make_best_cover(segs, lines: list[str], out_png: Path, *, settings: dict | None = None,
                     max_tries: int = 8, source_out: Path | None = None) -> Path:
-    """先选看镜头的微笑帧，找不到合适微笑时只接受看镜头的自然表情，并记录说明。"""
+    """先选看镜头、不露齿的闭嘴微笑；没有时选看镜头的闭嘴自然表情，并记录说明。"""
     import json
 
     _birefnet()
@@ -421,7 +432,7 @@ def make_best_cover(segs, lines: list[str], out_png: Path, *, settings: dict | N
     cands, ref = candidates(segs)
     ranked = sorted((m for m in cands if not face_problems(m, ref)),
                     key=lambda m: (cover_faces.smiling(m), face_score(m, ref)), reverse=True)
-    log = {"selector": "camera-smile-v1", "candidates": len(cands), "ref": ref,
+    log = {"selector": "camera-closed-smile-v2", "candidates": len(cands), "ref": ref,
            "passed_first_check": len(ranked), "smile_candidates": sum(cover_faces.smiling(m) for m in ranked), "tries": []}
     out_png.parent.mkdir(parents=True, exist_ok=True)
     record = out_png.with_name("cover_check.json")
@@ -430,43 +441,42 @@ def make_best_cover(segs, lines: list[str], out_png: Path, *, settings: dict | N
         cancellation.check()
         if len(log["tries"]) >= max_tries:
             break
-        if any(old["clip"] == m["clip"] and abs(old["t"] - m["t"]) < .12 for old in tried):
-            continue
         tried.append(m)
         entry = {"clip": Path(m["clip"]).name, "t": m["t"], "zoom": m["zoom"], "score": round(face_score(m, ref), 3)}
         log["tries"].append(entry)
         try:
-            img = _grab(Path(m["clip"]), m["t"], m["zoom"], W, H, settings=settings)
+            original = _grab(Path(m["clip"]), m["t"], m["zoom"], W, H)
         except RuntimeError as e:
             entry["problems"] = [f"取不到这一帧：{e}"[:160]]
             continue
-        fm = face_metrics(img)
+        fm = face_metrics(original)
         problems = face_problems(fm, {**ref, "sharp": 0.0})
         entry.update(problems=problems, face={k: v for k, v in (fm or {}).items() if k != "oval"})
         if problems:
             continue
+        img = _grab(Path(m["clip"]), m["t"], m["zoom"], W, H, settings=settings)
         mask, info = _person_mask(img, fm.get("oval") if fm else None)
         entry["mask"] = info
         problems.extend(mask_problems(info))
         if problems:
             continue
         is_smile = cover_faces.smiling(fm)
-        note = "" if is_smile else "未找到看向镜头且微笑的合适画面，已选用看向镜头、表情自然的帧。"
+        note = "" if is_smile else "未找到看向镜头且不露齿微笑的合适画面，已选用看向镜头、闭嘴且表情自然的帧。"
         log["chosen"] = {"clip": entry["clip"], "t": m["t"], "zoom": m["zoom"], "ok": True,
-                         "mode": "smile" if is_smile else "natural", "note": note}
+                         "mode": "smile" if is_smile else "natural", "mouth_policy": "closed_lip", "note": note}
         compose(img, mask, lines, out_png)
         if source_out is not None:
             from . import look_sources
             look_sources.save(Path(m["clip"]), m["t"], m["zoom"], source_out)
         record.write_text(json.dumps(log, ensure_ascii=False, indent=1), encoding="utf-8")
         return out_png
-    log["error"] = "未找到看向镜头且表情自然、抠图合格的清晰人像，请补充看向镜头的画面后重试"
+    log["error"] = "未找到看向镜头、不露齿且表情自然、抠图合格的清晰人像，请补充看向镜头的闭嘴画面后重试"
     record.write_text(json.dumps(log, ensure_ascii=False, indent=1), encoding="utf-8")
     raise RuntimeError(log["error"])
 
 
 def pick_frame(segs, talk_zoom: float = 1.0) -> tuple:
-    """只选不做：先找看镜头的微笑，再选看镜头的自然表情；不接受侧脸或目光移开。"""
+    """只选不做：先找不露齿的闭嘴微笑，再选看镜头的闭嘴自然表情。"""
     cands, ref = candidates(segs)
     eligible = [m for m in cands if not face_problems(m, ref)]
     if not eligible:

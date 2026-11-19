@@ -43,6 +43,15 @@ def metrics(img: np.ndarray) -> dict | None:
     ears = [dist(159, 145) / max(1., dist(33, 133)), dist(386, 374) / max(1., dist(362, 263))]
     mouth_width = max(1., dist(61, 291))
     mouth_y = (p[13, 1] + p[14, 1]) / 2
+    gap_max = max(dist(a, b) / mouth_width for a, b in ((82, 87), (13, 14), (312, 317)))
+    mouth_mask = np.zeros((sh, sw), np.uint8)
+    inner = [78, 191, 80, 81, 82, 13, 312, 311, 310, 415, 308, 324, 318, 402, 317, 14, 87, 178, 88, 95]
+    cv2.fillPoly(mouth_mask, [p[inner].astype(np.int32)], 1)
+    mouth_pixels = small[mouth_mask > 0].astype(np.float32)
+    bright_ratio = 0.
+    if len(mouth_pixels) >= 8:
+        high, low = mouth_pixels.max(axis=1), mouth_pixels.min(axis=1)
+        bright_ratio = float(((low > 150) & (high - low < high * .18)).mean())
     iris = []
     for center, a, b in ((468, 33, 133), (473, 362, 263)):
         axis = p[b] - p[a]
@@ -64,6 +73,7 @@ def metrics(img: np.ndarray) -> dict | None:
         "ear": round(min(ears), 4), "ear_diff": round(abs(ears[0] - ears[1]) / max(*ears, 1e-6), 4),
         "blink": round(max(blend["eyeBlinkLeft"], blend["eyeBlinkRight"]), 4),
         "mar": round(dist(13, 14) / mouth_width, 4), "jaw_open": round(blend["jawOpen"], 4),
+        "mouth_gap_max": round(gap_max, 4), "mouth_bright_ratio": round(bright_ratio, 4),
         "smile": round(float(mouth_y - (p[61, 1] + p[291, 1]) / 2) / mouth_width, 4),
         "smile_left": round(smile_l, 4), "smile_right": round(smile_r, 4),
         "smile_confidence": round(min(smile_l, smile_r), 4),
@@ -78,14 +88,18 @@ def metrics(img: np.ndarray) -> dict | None:
     }
 
 
+def mouth_closed(m: dict | None) -> bool:
+    return bool(m and m.get("mar", 1) <= .035 and m.get("mouth_gap_max", m.get("mar", 1)) <= .05
+                and m.get("jaw_open", 1) <= .08 and m.get("mouth_bright_ratio", 0) <= .15)
+
+
 def smiling(m: dict | None) -> bool:
     if not m:
         return False
-    # 两侧嘴角同时上扬，允许自然露齿，不把张大嘴说话当成微笑。
+    # 必须嘴唇闭合且两侧嘴角上扬，不接受露齿笑和说话时的嘴型。
     confidence = m.get("smile_confidence", 0)
-    return (confidence >= .45 and m.get("frown", 1) < .2
-            and abs(m.get("smile_left", 0) - m.get("smile_right", 0)) <= .3
-            and m.get("jaw_open", 1) <= (.25 if confidence >= .65 else .20) and m.get("mar", 1) <= .24)
+    return (mouth_closed(m) and confidence >= .25 and m.get("smile", 0) >= .02 and m.get("frown", 1) < .2
+            and abs(m.get("smile_left", 0) - m.get("smile_right", 0)) <= .3)
 
 
 def problems(m: dict | None, ref: dict) -> list[str]:
@@ -108,8 +122,8 @@ def problems(m: dict | None, ref: dict) -> list[str]:
     if ((horizontal > .16 and not (horizontal <= .20 and centered)) or abs(m["gaze_vertical"]) > .18
             or m["gaze_eye_max"] > .28 or m["iris_offset"] > .20):
         bad.append("眼神没有看向镜头")
-    if m["mar"] > (.24 if smiling(m) else .14) or m["jaw_open"] > (.25 if smiling(m) else .20):
-        bad.append("张嘴说话或嘴型不自然")
+    if not mouth_closed(m):
+        bad.append("嘴唇未闭合或可见牙齿")
     if m["frown"] > .35:
         bad.append("嘴角表情不自然")
     if m["sharp"] < max(18., .4 * ref["sharp"]):
@@ -118,7 +132,7 @@ def problems(m: dict | None, ref: dict) -> list[str]:
 
 
 def score(m: dict, ref: dict) -> float:
-    return (3 * m.get("smile_confidence", 0) + .8 * m.get("stable_neighbors", 0)
+    return (6 * m.get("smile_confidence", 0) + .4 * m.get("stable_neighbors", 0)
             + 1.5 * max(0, 1 - abs(m.get("gaze_horizontal", 1)) / .16)
             + max(0, 1 - abs(m.get("pose_yaw", 90)) / 12)
             + .5 * max(0, 1 - abs(m.get("roll", 90)) / 9)

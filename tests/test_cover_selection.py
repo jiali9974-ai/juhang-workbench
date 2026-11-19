@@ -12,7 +12,8 @@ from jh import config, cover, cover_faces, outputs
 
 
 def face(**changes):
-    return {"ear": .28, "ear_diff": .04, "blink": .1, "mar": .08, "jaw_open": .10,
+    return {"ear": .28, "ear_diff": .04, "blink": .1, "mar": .01, "jaw_open": .02, "smile": .04,
+            "mouth_gap_max": .02, "mouth_bright_ratio": 0.,
             "smile_confidence": .6, "smile_left": .63, "smile_right": .6, "frown": 0.,
             "pose_yaw": 2., "pose_pitch": 5., "roll": 2., "gaze_horizontal": .05, "gaze_vertical": .04,
             "gaze_eye_max": .1, "iris_offset": .08, "sharp": 200., "fw": .25, "cx": .5, "cy": .32, "top": .2,
@@ -34,11 +35,14 @@ class CoverSelectionTests(unittest.TestCase):
                                 ({"iris_offset": .3}, "眼神没有看向镜头"),
                                 ({"pose_yaw": 30}, "脸没有朝向镜头"),
                                 ({"blink": .7}, "闭眼或眼睛状态不自然"),
-                                ({"jaw_open": .5}, "张嘴说话或嘴型不自然")]:
+                                ({"jaw_open": .5}, "嘴唇未闭合或可见牙齿")]:
             with self.subTest(change=change):
                 self.assertIn(problem, cover_faces.problems(face(**change), self.ref))
-        # 露齿微笑可以有小幅张嘴，不能继续用旧规则一律拒绝。
-        self.assertEqual(cover_faces.problems(face(mar=.20, jaw_open=.23, smile_confidence=.75, smile_left=.75, smile_right=.75), self.ref), [])
+        # 即使微笑分很高，也不能选露牙或张嘴的帧。
+        self.assertIn("嘴唇未闭合或可见牙齿", cover_faces.problems(face(mar=.20, jaw_open=.23), self.ref))
+        self.assertFalse(cover_faces.smiling(face(mar=.18, smile_confidence=.9)))
+        self.assertFalse(cover_faces.smiling(face(mouth_gap_max=.08)))
+        self.assertFalse(cover_faces.smiling(face(mouth_bright_ratio=.4)))
         self.assertEqual(cover_faces.problems(face(gaze_horizontal=.18, iris_offset=.08), self.ref), [])
         self.assertIn("眼神没有看向镜头", cover_faces.problems(face(gaze_horizontal=.18, iris_offset=.17), self.ref))
         self.assertFalse(cover_faces.smiling(face(smile_confidence=.42, jaw_open=.25)))
@@ -66,7 +70,8 @@ class CoverSelectionTests(unittest.TestCase):
         mask.assert_called_once()
         chosen = json.loads((self.root / "cover_check.json").read_text(encoding="utf-8"))["chosen"]
         self.assertEqual(chosen["mode"], "natural")
-        self.assertIn("未找到看向镜头且微笑", chosen["note"])
+        self.assertIn("未找到看向镜头且不露齿微笑", chosen["note"])
+        self.assertEqual(chosen["mouth_policy"], "closed_lip")
 
     def test_failed_hd_face_does_not_get_composited_or_matted(self):
         candidate = face(t=1., clip="a.mov", zoom=1.)
@@ -89,6 +94,17 @@ class CoverSelectionTests(unittest.TestCase):
         self.assertGreaterEqual(len(samples), 3)
         for sample in samples[:3]:
             image = cover._grab(path, sample["t"], 1., 540, 960)
+            self.assertAlmostEqual(float(image[:, :, 2].mean()), sample["red"], delta=3)
+        # 视频比音频晚开始时，仍按文件播放时间定位，不能把视频流起点当成零。
+        offset = self.root / "offset.mkv"
+        result = subprocess.run([config.ffmpeg(), "-nostdin", "-v", "error", "-y", "-f", "lavfi", "-i", "anullsrc=r=48000:cl=mono",
+                                 "-itsoffset", "0.25", "-i", str(path), "-map", "1:v", "-map", "0:a", "-c:v", "copy", "-c:a", "pcm_s16le", "-t", "1.5", str(offset)], capture_output=True)
+        self.assertEqual(result.returncode, 0, result.stderr.decode(errors="replace"))
+        with patch.object(cover, "face_metrics", side_effect=lambda image: {"red": float(image[:, :, 2].mean())}):
+            delayed = cover._scan(offset, .13, .9, 1., .2)
+        self.assertGreaterEqual(delayed[0]["t"], .249)
+        for sample in delayed[:3]:
+            image = cover._grab(offset, sample["t"], 1., 540, 960)
             self.assertAlmostEqual(float(image[:, :, 2].mean()), sample["red"], delta=3)
 
     def test_cover_note_does_not_hide_video_when_metadata_is_missing_or_corrupt_and_is_deleted_with_it(self):
