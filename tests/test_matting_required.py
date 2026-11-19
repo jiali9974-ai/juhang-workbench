@@ -35,6 +35,7 @@ class RequiredMattingTests(unittest.TestCase):
              patch.object(render.config, "output_root", return_value=self.root / "outputs"), \
              patch.object(render.config, "load", return_value={"render": {"cover": {"enabled": True}}}), \
              patch.object(render, "plan", return_value=[]), patch.object(render.look, "current", return_value={}), \
+             patch.object(render.graphics, "current", return_value={}), \
              patch.object(cover, "make_best_cover", side_effect=RuntimeError("主抠图模型不可用")), \
              patch.object(render, "compose_segments") as encode:
             with self.assertRaisesRegex(RuntimeError, "已停止出片.*主抠图模型不可用"):

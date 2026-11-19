@@ -27,7 +27,7 @@ export function AppDock({ route }: { route: Route }) {
     },
     {
       key: "beauty",
-      label: "美颜设置",
+      label: "画面编辑",
       icon: Wand2,
       active: route.page === "beauty",
       onClick: () => go({ page: "beauty", batch: (route.page === "gen" || route.page === "batch" || route.page === "script" ? route.batch : undefined) ?? getCurrent() ?? undefined }),

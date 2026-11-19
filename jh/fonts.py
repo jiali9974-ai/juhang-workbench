@@ -1,0 +1,142 @@
+"""浏览器和 libass 共用的字体库；用户字体存放在共享数据目录。"""
+from __future__ import annotations
+
+import hashlib
+import re
+import shutil
+import struct
+import tempfile
+from functools import lru_cache
+from pathlib import Path
+
+from PIL import ImageFont
+
+from . import config
+
+MAX_BYTES = 25 * 1024 * 1024
+BUILTINS = {
+    "SourceHanSansCN-Heavy.otf": "思源黑体 · 粗",
+    "ZCOOLXiaoWei-Regular.ttf": "站酷小薇体",
+    "ZCOOLKuaiLe-Regular.ttf": "站酷快乐体",
+}
+
+
+def _directory() -> Path:
+    directory = config.data_root() / "fonts"
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
+
+
+def _family(path: Path, fallback: str) -> tuple[str, int]:
+    """FreeType 在 Windows 可能把中文字体家族名读成问号，直接读取 Unicode name 表。"""
+    data = path.read_bytes()
+    candidates, weight = [], 400
+    count = struct.unpack_from(">H", data, 4)[0]
+    for i in range(count):
+        tag, _, offset, _ = struct.unpack_from(">4sIII", data, 12 + i * 16)
+        if tag == b"OS/2":
+            weight = max(100, min(900, struct.unpack_from(">H", data, offset + 4)[0]))
+        if tag != b"name":
+            continue
+        _, records, strings = struct.unpack_from(">HHH", data, offset)
+        for j in range(records):
+            platform, encoding, language, name, length, start = struct.unpack_from(">HHHHHH", data, offset + 6 + j * 12)
+            if name not in (1, 16) or platform not in (0, 3):
+                continue
+            raw = data[offset + strings + start:offset + strings + start + length]
+            try:
+                text = raw.decode("utf-16-be")
+            except UnicodeError:
+                continue
+            score = (language == 1033, name == 1, platform == 3)
+            candidates.append((score, text))
+    return (max(candidates)[1] if candidates else fallback), weight
+
+
+def _info(path: Path, builtin: bool) -> dict:
+    font = ImageFont.truetype(str(path), 100)
+    family, style = font.getname()
+    family, weight = _family(path, family)
+    if re.search(r"[,{}\\\r\n]", family):
+        raise ValueError("字体名称包含不支持的字符")
+    ascent, descent = font.getmetrics()
+    return {"id": path.stem, "name": BUILTINS.get(path.name, family),
+            "family": family, "builtin": builtin, "file": path.name,
+            "preview_scale": round(100 / max(1, ascent + descent), 6), "weight": weight}
+
+
+@lru_cache(maxsize=128)
+def _cached_info(path: str, modified: int, size: int, builtin: bool) -> dict:
+    return _info(Path(path), builtin)
+
+
+def catalog() -> list[dict]:
+    result = []
+    for directory, builtin in ((config.ROOT / "fonts", True), (_directory(), False)):
+        for path in sorted(directory.iterdir()):
+            if path.suffix.lower() in (".ttf", ".otf") and path.is_file():
+                try:
+                    stat = path.stat()
+                    result.append(dict(_cached_info(str(path), stat.st_mtime_ns, stat.st_size, builtin)))
+                except (OSError, ValueError, struct.error):
+                    continue
+    return result
+
+
+def resolve(font_id: str) -> tuple[Path, dict]:
+    for item in catalog():
+        if item["id"] == font_id:
+            directory = config.ROOT / "fonts" if item["builtin"] else _directory()
+            return directory / item["file"], item
+    raise ValueError("找不到所选字体，请重新选择或上传字体")
+
+
+def default_id() -> str:
+    return "SourceHanSansCN-Heavy"
+
+
+async def receive(filename: str, stream) -> dict:
+    suffix = Path(filename).suffix.lower()
+    if suffix not in (".ttf", ".otf"):
+        raise ValueError("请上传 TTF 或 OTF 字体文件")
+    directory = _directory()
+    with tempfile.NamedTemporaryFile(dir=directory, suffix=suffix, delete=False) as f:
+        temporary = Path(f.name)
+        try:
+            digest, size = hashlib.sha256(), 0
+            async for chunk in stream:
+                size += len(chunk)
+                if size > MAX_BYTES:
+                    raise ValueError("字体文件不能超过 25 MB")
+                digest.update(chunk)
+                f.write(chunk)
+        except BaseException:
+            f.close()
+            temporary.unlink(missing_ok=True)
+            raise
+    try:
+        _info(temporary, False)  # 必须能被实际渲染引擎读取
+        target = directory / f"user-{digest.hexdigest()[:24]}{suffix}"
+        temporary.replace(target)
+        return _info(target, False)
+    except (OSError, struct.error) as e:
+        raise ValueError("无法读取这个字体文件，请换一个有效的 TTF 或 OTF 文件") from e
+    finally:
+        temporary.unlink(missing_ok=True)
+
+
+def delete(font_id: str, settings: dict) -> None:
+    path, item = resolve(font_id)
+    if item["builtin"]:
+        raise ValueError("内置字体随工作台提供，不能删除")
+    used = [settings["subtitle"], *settings["elements"]]
+    if any(layer.get("font_id") == font_id for layer in used):
+        raise ValueError("这个字体正在使用，请先为字幕或文字换字体并保存，再删除")
+    path.unlink()
+
+
+def snapshot(directory: Path) -> None:
+    directory.mkdir(parents=True, exist_ok=True)
+    for item in catalog():
+        path = (config.ROOT / "fonts" if item["builtin"] else _directory()) / item["file"]
+        shutil.copy2(path, directory / path.name)

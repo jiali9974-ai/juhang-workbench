@@ -1,5 +1,6 @@
 // 和工作台后端（FastAPI）通信的类型与请求
 import { backgroundTasks } from "./background-tasks.ts"
+import type { EditorFont, GraphicsSettings } from "./graphics"
 
 export type Lang = "yue" | "zh" | string
 export type Role = "hook" | "product" | "cta"
@@ -255,6 +256,12 @@ export const api = {
   renderAll: (b: string, all = false) => request<Job[]>(`/api/batches/${e(b)}/render_all`, { method: "POST", body: JSON.stringify({ all }) }),
   /** 美颜调色强度（批量出片都用这个） */
   getLook: () => request<{ settings: LookSettings; defaults: LookSettings }>("/api/look"),
+  getGraphics: () => request<{ settings: GraphicsSettings; defaults: GraphicsSettings; fonts: EditorFont[] }>("/api/graphics"),
+  saveGraphics: (settings: GraphicsSettings) => request<{ settings: GraphicsSettings }>("/api/graphics", { method: "PUT", body: JSON.stringify(settings) }),
+  uploadFont: (file: File) => request<{ font: EditorFont; fonts: EditorFont[] }>(`/api/fonts?filename=${e(file.name)}`, { method: "POST", body: file, headers: { "Content-Type": "application/octet-stream" } }),
+  deleteFont: (id: string) => request<{ ok: boolean; fonts: EditorFont[] }>(`/api/fonts/${e(id)}`, { method: "DELETE" }),
+  graphicsPreview: (settings: GraphicsSettings, source: Pick<OutputVideo, "batch" | "id"> | null, look: LookSettings) =>
+    request<{ url: string }>("/api/graphics/preview", { method: "POST", body: JSON.stringify({ settings, source, look }) }),
   saveLook: (s: LookSettings) => request<{ settings: LookSettings }>("/api/look", { method: "PUT", body: JSON.stringify(s) }),
   lookPreview: async (source: Pick<OutputVideo, "batch" | "id"> | null, kind: "face" | "watch", settings: LookSettings) => {
     const result = await request<{ kind: "face" | "watch"; original: string; beauty: string; source?: "cover" | "default"; fallback?: boolean }>(

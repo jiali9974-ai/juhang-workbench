@@ -129,7 +129,7 @@ export function BatchPage({ batch, tab }: { batch: string; tab: BatchTab }) {
         <div className="flex flex-wrap gap-2">
           <DeleteProject kind="batch" id={batch} name={b.batch} current />
           <Button variant="outline" size="lg" onClick={addMaterial}><Plus />添加素材</Button>
-          <Button variant="outline" size="lg" onClick={() => go({ page: "beauty", batch })} disabled={!b.clips}><Wand2 />美颜调色</Button>
+          <Button variant="outline" size="lg" onClick={() => go({ page: "beauty", batch })} disabled={!b.clips}><Wand2 />画面编辑</Button>
           <Button variant="outline" size="lg" onClick={() => go({ page: "gen", batch })}><Film />生成预览</Button>
           {b.transcribed < b.clips && (
             <Button variant="ghost" onClick={transcribe} disabled={running}><Mic />只做识别</Button>

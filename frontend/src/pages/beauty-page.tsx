@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState } from "react"
 import { Loader2, RefreshCw } from "lucide-react"
 import { toast } from "sonner"
 
-import { BeautyEditor } from "@/components/beauty-panel"
+import { FrameEditor } from "@/components/frame-editor"
 import { Button } from "@/components/ui/button"
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select"
 import { useSessionState } from "@/hooks/use-session-state"
@@ -40,10 +40,11 @@ export function BeautyPage({ batch }: { batch?: string }) {
 
   const header = (
     <div className="mb-8">
-      <h1 className={PAGE_TITLE}>美颜</h1>
+      <h1 className={PAGE_TITLE}>画面编辑</h1>
+      <p className="mt-3 text-sm text-muted-foreground">调整画面质感、编辑文字，让重点动起来。</p>
       <div className="mt-5 flex flex-wrap items-center gap-2">
         <Select value={selected ? sourceKey(selected) : "default"} onValueChange={setSelection}>
-          <SelectTrigger className="w-64 max-w-full rounded-full" aria-label="美颜测试图"><SelectValue /></SelectTrigger>
+          <SelectTrigger className="w-64 max-w-full rounded-full" aria-label="预览画面来源"><SelectValue /></SelectTrigger>
           <SelectContent>
             <SelectItem value="default">默认测试图</SelectItem>
             {outputs.map((video) => <SelectItem key={sourceKey(video)} value={sourceKey(video)}>
@@ -61,7 +62,7 @@ export function BeautyPage({ batch }: { batch?: string }) {
 
   return (
     <div className={PAGE_CONTAINER}>
-      <BeautyEditor batch={project?.batch ?? null} scripts={project?.scripts ?? 0} source={source}
+      <FrameEditor batch={project?.batch ?? null} scripts={project?.scripts ?? 0} source={source}
         revision={`${selected?.updated ?? "default"}:${revision}`} header={header} />
     </div>
   )

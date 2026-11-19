@@ -13,7 +13,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from . import cancellation, config, look, media, script as scriptmod
+from . import cancellation, config, fonts, graphics, look, media, script as scriptmod
 
 PUNCT_STRIP = "，。,.！!？?、；;：: "
 
@@ -621,16 +621,26 @@ def _ass_time(t: float) -> str:
     return f"{int(h)}:{int(m):02d}:{s:05.2f}"
 
 
-def build_ass(segs: list[Segment], total: float, path: Path, y_ratio: float | None = None, bottom_line: bool = False) -> None:
+def build_ass(segs: list[Segment], total: float, path: Path, y_ratio: float | None = None, bottom_line: bool = False,
+              design: dict | None = None) -> None:
     """y_ratio：字幕中心高度（画面比例），不传就用配置里的。
     bottom_line=True：让字幕最后一行的中心落在 y_ratio（两行字幕往上长），整条转粤语时用来始终压住原视频烧进去的普通话字幕。"""
     cfg = config.load()
     st, r = cfg["style"], cfg["render"]
     W, H = r["width"], r["height"]
+    design = graphics.current() if design is None else design
+    font_catalog = {item["id"]: item for item in fonts.catalog()}
+    caption = design["subtitle"]
+    if any(layer["font_id"] not in font_catalog for layer in [caption, *design["elements"]]):
+        raise RuntimeError("画面设置使用的字体不存在，请在画面编辑中重新选择字体")
     sub, slo, dis = st["subtitle"], st["slogan"], st["disclaimer"]
     font = st["font_name"]
     bold = -1 if st.get("font_bold") else 0
-    y_sub = int(H * (y_ratio if y_ratio is not None else sub["y_ratio"]))
+    y_sub = int(H * (y_ratio if y_ratio is not None else caption["y"] / 100))
+    x_sub = int(W * caption["x"] / 100)
+    caption_size = caption["size"] * W / 1440
+    caption_style = graphics.style_tags(caption, W, font_catalog[caption["font_id"]]["family"], font_catalog[caption["font_id"]]["weight"])
+    caption_style += f"\\shad{sub.get('shadow', 2)}"
     header = f"""[Script Info]
 ScriptType: v4.00+
 PlayResX: {W}
@@ -648,22 +658,17 @@ Style: Disc,{font},{dis['size']},{dis['color']},&H000000FF,{dis['outline_color']
 Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
 """
     ev = []
-    end = _ass_time(total)
-    if slo.get("enabled", True):
-        for ci, col in enumerate(slo["columns"]):
-            x = slo["x"] + ci * int(slo["column_gap"])
-            ev.append(f"Dialogue: 1,0:00:00.00,{end},Slogan,,0,0,0,,{{\\pos({x},{slo['y']})}}" + r"\N".join(col))
-    if dis.get("enabled", True):
-        ev.append(f"Dialogue: 1,0:00:00.00,{end},Disc,,0,0,0,,{{\\pos({W // 2},{int(H * dis['y_ratio'])})}}{dis['text']}")
+    ev.extend(graphics.events(design, total, W, H, font_catalog))
     t = 0.0
     for s in segs:
         for a, b, text in s.subs:
             a2, b2 = t + a, min(t + b, t + s.v_dur)
-            if b2 - a2 < 0.05:
+            if b2 - a2 < 0.05 or not caption["enabled"]:
                 continue
-            pos = f"\\an2\\pos({W // 2},{y_sub + int(sub['size']) // 2})" if bottom_line else f"\\pos({W // 2},{y_sub})"
+            pos = f"\\an2\\pos({x_sub},{y_sub + int(caption_size) // 2})" if bottom_line else f"\\pos({x_sub},{y_sub})"
+            text = graphics.escape(text)
             shown = wrap_line(text, sub["max_chars_per_line"]) if sub_lines() >= 2 else text.replace(" ", "")
-            ev.append(f"Dialogue: 2,{_ass_time(a2)},{_ass_time(b2)},Sub,,0,0,0,,{{{pos}}}{shown}")
+            ev.append(f"Dialogue: 2,{_ass_time(a2)},{_ass_time(b2)},Sub,,0,0,0,,{{{pos}{caption_style}}}{shown}")
         t += s.v_dur
     path.write_text(header + "\n".join(ev) + "\n", encoding="utf-8")
 
@@ -682,6 +687,7 @@ def render(script: dict, progress=None, on_stage=None) -> Path:
     out = out_dir / f"{script['id']}.mp4"
     cover = None
     settings = look.current()
+    design = graphics.current()
     ccfg = config.load()["render"].get("cover") or {}
     if ccfg.get("enabled") and script.get("cover"):
         if on_stage:
@@ -703,7 +709,7 @@ def render(script: dict, progress=None, on_stage=None) -> Path:
     # 输出目录仅发布完整成片；取消重新生成时保留原来的成片。
     with tempfile.TemporaryDirectory(prefix=".render-", dir=out_dir) as temporary:
         pending = Path(temporary) / out.name
-        total = compose_segments(segs, work, pending, progress, cover=cover, settings=settings, on_stage=on_stage)
+        total = compose_segments(segs, work, pending, progress, cover=cover, settings=settings, on_stage=on_stage, design=design)
         cover_jpg = work / f"{script['id']}_封面.jpg"
         if cover and cover_jpg.exists():
             embed_cover(pending, cover_jpg)
@@ -731,11 +737,12 @@ def embed_cover(video: Path, cover_jpg: Path) -> None:
 
 
 def compose_segments(segs: list[Segment], work: Path, out: Path, progress=None,
-                     cover: Path | None = None, settings: dict | None = None, on_stage=None) -> float:
+                     cover: Path | None = None, settings: dict | None = None, on_stage=None, design: dict | None = None) -> float:
     """逐段编码 → 拼接 → 烧字幕和角标（左上角竖排黄字、底部声明）、响度统一、混背景音乐 → 导出 out。返回总时长。
     素材剪辑统一使用这一套成片样式。"""
     cfg = config.load()
     settings = look.current() if settings is None else settings
+    design = graphics.current() if design is None else design
     work.mkdir(parents=True, exist_ok=True)
     seg_files = []
     if on_stage:
@@ -754,8 +761,8 @@ def compose_segments(segs: list[Segment], work: Path, out: Path, progress=None,
                       str(work / "body.mp4")])
 
     total = sum(s.v_dur for s in segs)
-    build_ass(segs, total, work / "video.ass")
-    shutil.copytree(cfg["style"]["font_dir"], work / "fonts")
+    build_ass(segs, total, work / "video.ass", design=design)
+    fonts.snapshot(work / "fonts")
 
     if progress:
         progress(len(segs), len(segs), "合成字幕与音乐")

@@ -149,6 +149,7 @@ class JobCancellationTests(unittest.TestCase):
                  patch.object(render.config, "load", return_value={"render": {"cover": {"enabled": True}}}), \
                  patch("jh.cover.make_best_cover", side_effect=make_cover), \
                  patch.object(render.look, "current", return_value={}), \
+                 patch.object(render.graphics, "current", return_value={}), \
                  patch.object(render, "plan", return_value=[]), \
                  patch.object(render, "compose_segments", side_effect=stop):
                 with self.assertRaises(cancellation.JobCancelled):
@@ -164,6 +165,7 @@ class JobCancellationTests(unittest.TestCase):
                  patch.object(render.config, "load", return_value={"render": {"cover": {"enabled": True}}}), \
                  patch("jh.cover.make_best_cover", side_effect=make_cover), \
                  patch.object(render.look, "current", return_value={}), \
+                 patch.object(render.graphics, "current", return_value={}), \
                  patch.object(render, "plan", return_value=[]), \
                  patch.object(render, "embed_cover"), \
                  patch.object(render, "compose_segments", side_effect=complete):

@@ -381,6 +381,78 @@ def render_all(batch: str, data: dict = Body(default={})):
 
 # ---------------- 美颜和调色强度（页面上调，批量出片都用这个） ----------------
 
+@app.get("/api/graphics")
+def get_graphics():
+    from jh import graphics, fonts
+
+    return {"settings": graphics.current(), "defaults": graphics.normalize(graphics.defaults()), "fonts": fonts.catalog()}
+
+
+@app.put("/api/graphics")
+def put_graphics(data: dict = Body(...)):
+    from jh import graphics
+
+    try:
+        return {"settings": graphics.save(data)}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/fonts/{font_id}/file")
+def font_file(font_id: str):
+    from jh import fonts
+
+    try:
+        path, _ = fonts.resolve(font_id)
+    except ValueError as e:
+        raise HTTPException(404, str(e))
+    return FileResponse(path, media_type="font/otf" if path.suffix == ".otf" else "font/ttf")
+
+
+@app.post("/api/fonts")
+async def upload_font(request: Request, filename: str):
+    from jh import fonts
+
+    try:
+        item = await fonts.receive(filename, request.stream())
+        return {"font": item, "fonts": fonts.catalog()}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.delete("/api/fonts/{font_id}")
+def delete_font(font_id: str):
+    from jh import fonts, graphics
+
+    if jobs.busy():
+        raise HTTPException(409, "有任务正在处理，请等任务完成后再删除字体")
+    try:
+        with graphics.LOCK:
+            fonts.delete(font_id, graphics.current())
+        return {"ok": True, "fonts": fonts.catalog()}
+    except ValueError as e:
+        raise HTTPException(400, str(e))
+
+
+@app.post("/api/graphics/preview")
+def graphics_preview(data: dict = Body(...)):
+    from jh import graphics
+
+    try:
+        return graphics.preview(data, jobs.list())
+    except (ValueError, RuntimeError, FileNotFoundError) as e:
+        raise HTTPException(400, str(e))
+
+
+@app.get("/api/graphics/preview/{key}.mp4")
+def graphics_preview_file(key: str):
+    if not key.isalnum() or len(key) != 24:
+        raise HTTPException(404)
+    path = config.data_root() / "preview" / "graphics" / key / "preview.mp4"
+    if not path.is_file():
+        raise HTTPException(404)
+    return FileResponse(path, media_type="video/mp4")
+
 @app.get("/api/look")
 def get_look():
     from jh import look
