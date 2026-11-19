@@ -141,12 +141,21 @@ def _raw_output() -> list[str]:
     return ["-an", "-pix_fmt", "yuv420p", "-threads:v", "1", "-f", "rawvideo", "pipe:1"]
 
 
-def _raw_input(width: int, height: int, fps: int) -> list[str]:
+def _raw_input(width: int, height: int, fps: int, *, bt709: bool = False) -> list[str]:
+    color = ["-colorspace", "bt709", "-color_range", "tv", "-color_primaries", "bt709", "-color_trc", "bt709"] if bt709 else []
     return ["-f", "rawvideo", "-pixel_format", "yuv420p", "-video_size", f"{width}x{height}",
-            "-framerate", str(fps), "-i", "pipe:0"]
+            "-framerate", str(fps), *color, "-i", "pipe:0"]
 
 
 def _read_frame(decode: list[str], width: int, height: int) -> bytearray:
+    decode = list(decode)
+    # 裸 YUV 不携带色彩标签，预览管道先统一到 BT.709，编码 JPEG/PNG 时再明确解释。
+    color = "scale=out_color_matrix=bt709:out_range=tv,format=yuv420p"
+    if "-vf" in decode:
+        index = decode.index("-vf") + 1
+        decode[index] += "," + color
+    else:
+        decode.extend(["-vf", color])
     raw = cancellation.run_process(_ffmpeg([*decode, "-frames:v", "1", *_raw_output()]), capture_output=True)
     if raw.returncode or len(raw.stdout) != width * height * 3 // 2:
         raise RuntimeError("无法读取磨皮预览帧：" + raw.stderr.decode("utf-8", "replace")[-1000:])
@@ -163,7 +172,7 @@ def still(decode: list[str], encode: list[str], width: int, height: int, strengt
         finally:
             tracker.close()
     result = cancellation.run_process(
-        _ffmpeg([*_raw_input(width, height, 25), "-frames:v", "1", *encode]),
+        _ffmpeg([*_raw_input(width, height, 25, bt709=True), "-frames:v", "1", *encode]),
         input=frame, capture_output=True,
     )
     if result.returncode:

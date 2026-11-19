@@ -132,7 +132,7 @@ export function BeautyEditor({ batch, scripts, source, revision, header }: {
             </label>
             <div className="grid gap-5 px-1">
               <Slider label="磨皮" hint="跟随人脸局部磨皮，保护眼眉和嘴唇。0 关闭，50 是试片的力度。" value={s.smooth} onChange={(v) => set({ smooth: v })} disabled={!s.enabled} />
-              <Slider label="提亮调色" hint="只提亮画面，保留自然肤色与白色，保护高光。0 = 不额外提亮" value={s.tone} onChange={(v) => set({ tone: v })} disabled={!s.enabled} />
+              <Slider label="提亮调色" hint="通透提亮、自然红润肤色与干净浅蓝，保留黑白层次。0 = 不额外调色" value={s.tone} onChange={(v) => set({ tone: v })} disabled={!s.enabled} />
               <Slider label="手表特写锐化" hint="只用在没有人脸的画面，钻石、表盘更清楚。0 = 不锐化" value={s.sharpen} onChange={(v) => set({ sharpen: v })} disabled={!s.enabled} />
             </div>
             <div className="flex flex-wrap items-center gap-2 border-t pt-5">

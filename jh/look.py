@@ -2,7 +2,7 @@
 
 设置存在 data/settings/look.json，出片时读取：
   smooth  局部磨皮强度 0–1（0 = 不磨）。0.5 对应 1234_01 磨皮试片的力度。
-  tone    提亮调色强度 0–1（0 = 不额外提亮）。只提升亮度，保留自然肤色和中性白，不叠加暖色或饱和度
+  tone    提亮调色强度 0–1（0 = 不额外调色）。通透中间调、自然红润肤色与浅蓝，保护中性白与深色
   sharpen 手表特写锐化强度 0–1（0 = 不锐化）。只用在没有人脸的画面
   normalize 统一光线：不同素材先按老板肤色拉齐亮度和白平衡，再调色（见 normalize.py）
 """
@@ -16,8 +16,6 @@ from pathlib import Path
 from . import cancellation, config
 
 DEFAULTS = {"enabled": True, "normalize": True, "smooth": 0.5, "tone": 0.5, "sharpen": 0.5}
-# tone=1 时的亮度曲线；强度 t 时每个点按 x + t*(y-x) 插值，黑白端点保持不变。
-CURVE = [(0, 0), (0.12, 0.155), (0.35, 0.465), (0.6, 0.68), (0.85, 0.885), (1, 1)]
 
 
 def _path() -> Path:
@@ -58,15 +56,9 @@ def save(s: dict) -> dict:
 
 
 def _tone_filter(strength: float) -> str:
-    """在 YUV 的亮度通道上提亮，U/V 原样保留，避免增红、增饱和造成暖黄偏色。"""
-    points = [(16 + 219 * x, 16 + 219 * (x + strength * (y - x))) for x, y in CURVE]
-    expression = "val"
-    for (x0, y0), (x1, y1) in reversed(list(zip(points, points[1:]))):
-        segment = f"{y0:.4f}+(val-{x0:.4f})*{(y1 - y0) / (x1 - x0):.6f}"
-        expression = f"if(lte(val,{x1:.4f}),{segment},{expression})"
-    expression = f"if(lte(val,16),val,if(gte(val,235),val,{expression}))"
-    # JPEG 为全范围，视频通常为有限范围；先统一范围，再按 16–235 的亮度曲线处理。
-    return f"scale=in_range=auto:out_range=tv,format=yuv444p,lutyuv=y='{expression}':u=val:v=val"
+    from . import grading
+
+    return grading.tone_filter(strength)
 
 
 def filters(s: dict | None = None) -> dict:
@@ -269,7 +261,8 @@ def _preview_source(source: dict | None, kind: str, s: dict | None,
     if not beauty.is_file():
         chain = base
         if fl["normalize"] and selected.normalization:
-            chain += "," + selected.normalization
+            # 保存的旧校正使用 16–235 的视频亮度；JPEG 必须先转成相同范围。
+            chain += ",scale=in_range=auto:out_range=tv,format=yuv444p," + selected.normalization
         if kind == "watch" and fl["sharpen"]:
             chain += "," + fl["sharpen"]
         if fl["tone"]:

@@ -95,6 +95,18 @@ class LookSourceTests(unittest.TestCase):
             self.assertNotEqual(first["beauty"], second["beauty"])
             self.assertEqual(ffmpeg.call_count, 3)
 
+    def test_saved_jpeg_uses_video_range_before_applying_saved_lighting_correction(self):
+        selected = self.video()
+        raw = look_sources.cover_source_path(selected["batch"], selected["id"])
+        Image.new("RGB", (180, 320), (50, 50, 50)).save(raw, quality=100)
+        raw.with_suffix(".json").write_text(json.dumps({"normalization": "lutyuv=y='16+2*(val-16)':u=val:v=val"}), encoding="utf-8")
+        settings = {"enabled": True, "normalize": True, "smooth": 0, "tone": 0, "sharpen": 0}
+        response = self.preview(selected, settings)
+        self.assertEqual(response.status_code, 200, response.text)
+        image = np.asarray(Image.open(look._preview_dir() / response.json()["beauty"]), dtype=float)
+        # 黑点不变的曝光翻倍：RGB 50 应到约 100，而不是把 JPEG 数值当作 16–235 得到偏暗结果。
+        np.testing.assert_allclose(image[100, 100], 100, atol=2)
+
     def test_old_video_without_original_falls_back_honestly_and_invalid_sources_are_rejected(self):
         result = self.preview(self.video()).json()
         self.assertEqual((result["source"], result["fallback"]), ("default", True))
