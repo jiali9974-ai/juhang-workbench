@@ -35,14 +35,18 @@ class CoverSelectionTests(unittest.TestCase):
                                 ({"iris_offset": .3}, "眼神没有看向镜头"),
                                 ({"pose_yaw": 30}, "脸没有朝向镜头"),
                                 ({"blink": .7}, "闭眼或眼睛状态不自然"),
-                                ({"jaw_open": .5}, "嘴唇未闭合或可见牙齿")]:
+                                ({"jaw_open": .5}, "张嘴说话、露齿大笑或嘴型夸张")]:
             with self.subTest(change=change):
                 self.assertIn(problem, cover_faces.problems(face(**change), self.ref))
-        # 即使微笑分很高，也不能选露牙或张嘴的帧。
-        self.assertIn("嘴唇未闭合或可见牙齿", cover_faces.problems(face(mar=.20, jaw_open=.23), self.ref))
+        # 不强制嘴唇闭合：自然分开的轻微笑意可选，明显大笑、说话和抿嘴仍应排除。
+        gentle = face(mar=.07, mouth_gap_max=.09, jaw_open=.10, smile_confidence=.45, smile_left=.47, smile_right=.45)
+        self.assertTrue(cover_faces.smiling(gentle))
+        self.assertEqual(cover_faces.problems(gentle, self.ref), [])
+        self.assertIn("张嘴说话、露齿大笑或嘴型夸张", cover_faces.problems(face(mar=.20, jaw_open=.23), self.ref))
         self.assertFalse(cover_faces.smiling(face(mar=.18, smile_confidence=.9)))
-        self.assertFalse(cover_faces.smiling(face(mouth_gap_max=.08)))
-        self.assertFalse(cover_faces.smiling(face(mouth_bright_ratio=.4)))
+        self.assertFalse(cover_faces.smiling(face(mouth_press=.8)))
+        self.assertFalse(cover_faces.smiling(face(mouth_pucker=.7)))
+        self.assertFalse(cover_faces.smiling(face(mouth_bright_ratio=.6, mar=.1)))
         self.assertEqual(cover_faces.problems(face(gaze_horizontal=.18, iris_offset=.08), self.ref), [])
         self.assertIn("眼神没有看向镜头", cover_faces.problems(face(gaze_horizontal=.18, iris_offset=.17), self.ref))
         self.assertFalse(cover_faces.smiling(face(smile_confidence=.42, jaw_open=.25)))
@@ -70,8 +74,8 @@ class CoverSelectionTests(unittest.TestCase):
         mask.assert_called_once()
         chosen = json.loads((self.root / "cover_check.json").read_text(encoding="utf-8"))["chosen"]
         self.assertEqual(chosen["mode"], "natural")
-        self.assertIn("未找到看向镜头且不露齿微笑", chosen["note"])
-        self.assertEqual(chosen["mouth_policy"], "closed_lip")
+        self.assertIn("未找到看向镜头且微笑自然", chosen["note"])
+        self.assertEqual(chosen["mouth_policy"], "relaxed_smile")
 
     def test_failed_hd_face_does_not_get_composited_or_matted(self):
         candidate = face(t=1., clip="a.mov", zoom=1.)
