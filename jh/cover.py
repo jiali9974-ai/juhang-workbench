@@ -3,10 +3,10 @@
 第一行白字黑边（卖点），第二行绿字黑边 + 绿色下划线（悬念）。封面会放在成片最开头的一两帧，同时另存一张 jpg 方便手动上传。
 
 做封面时就把关（不是做完再挑）：
-- 选帧：按原始视频 PTS 每约 0.2 秒抽样，用 Face Landmarker 的表情系数、虹膜位置和头部姿态判断看镜头与自然、放松的轻微笑意。
-  微笑帧不够时扩大到同一素材的未剪辑部分，并在候选瞬间附近约每 0.04 秒细找，优先稳定的正脸微笑。
+- 选帧：按原始视频 PTS 每约 0.2 秒扫描成片关联的完整原素材，用表情系数、双眼位置和头部姿态判断看镜头与自然、放松的轻微笑意。
+  在笑容起止过渡及优选瞬间附近约每 0.025 秒细找，优先稳定的正脸微笑。
   找不到合适微笑时只接受看镜头的自然表情并记录说明，不用侧脸、目光移开的帧兜底；
-- 做封面：按分数从高到低，在原始高清帧上复查眼神、表情与自然嘴型，再应用美颜调色并检查抠图（脸完整、人像大小正常），
+- 做封面：优选帧统一用原始高清画面复查眼神、表情与自然嘴型，再排名、应用美颜调色并检查抠图（脸完整、人像大小正常），
   任何一项不合格就换下一帧重做，检查结果记在 cover_check.json；
 - 抠图只要人：只使用 BiRefNet-portrait 人像抠图（含头发细节），不可用时明确报错，
   下巴以上不限制，下巴以下只保留身体骨架范围（躯干、手臂、手）里面的部分，手里拿的表盒、桌面这些人以外的东西都不抠。
@@ -368,42 +368,79 @@ def _ref(cands: list[dict]) -> dict:
             "sharp": float(np.percentile([m["sharp"] for m in cands], 80)) if cands else 0.0}
 
 
-def candidates(segs, step: float = 0.2, want: int = 6) -> tuple[list[dict], dict]:
-    """先扫描剪辑片段；看镜头的微笑帧不足 want 时扩展到同一原素材，再在候选瞬间附近精扫。"""
+def _refinement_centers(cands: list[dict], ref: dict) -> list[dict]:
+    """优先细查轻微笑意，以及一段笑容的起止过渡，避免只盯着大笑的峰值。"""
+    camera = [m for m in cands if not [p for p in face_problems(m, ref) if p != "张嘴说话、露齿大笑或嘴型夸张"]]
+    centers = []
+
+    def add(m):
+        if not any(old["clip"] == m["clip"] and old["zoom"] == m["zoom"] and abs(old["t"] - m["t"]) < .25 for old in centers):
+            centers.append(m)
+
+    gentle = sorted((m for m in camera if cover_faces.mouth_natural(m)),
+                    key=lambda m: (cover_faces.smiling(m), face_score(m, ref)), reverse=True)
+    for m in gentle:
+        add(m)
+        if len(centers) >= 2:
+            break
+    groups = {}
+    for m in camera:
+        if m["smile_confidence"] >= .15:
+            groups.setdefault((m["clip"], m["zoom"]), []).append(m)
+    runs = []
+    for group in groups.values():
+        current = []
+        for m in sorted(group, key=lambda m: m["t"]):
+            if current and m["t"] - current[-1]["t"] > .40:
+                runs.append(current)
+                current = []
+            current.append(m)
+        if current:
+            runs.append(current)
+    for run in sorted(runs, key=lambda items: max(m["smile_confidence"] for m in items), reverse=True):
+        add(run[0])
+        if len(centers) < 6:
+            add(run[-1])
+        if len(centers) >= 6:
+            break
+    for m in gentle:
+        if len(centers) >= 8:
+            break
+        add(m)
+    return centers[:8]
+
+
+def candidates(segs, step: float = 0.2) -> tuple[list[dict], dict]:
+    """完整扫描成片关联的原素材，涵盖拍摄前后笑意，再细查过渡瞬间。"""
     from . import media
 
     out = []
-    used: dict[str, list[tuple[float, float]]] = {}
-    for s in segs:
-        out += _scan(s.clip, s.v_start, s.v_dur, s.zoom, step)
-        used.setdefault(str(s.clip), []).append((s.v_start, s.v_start + s.v_dur))
+    used = {}
+    for segment in segs:
+        used.setdefault(str(segment.clip), []).append(segment)
+    talk = float(config.load()["render"].get("talk_zoom", 1.0))
+    for clip, segments in used.items():
+        # 每个原素材只完整解码一次；不会因片内已有几个候选就漏掉拍摄前后的好表情。
+        out += _scan(Path(clip), 0., media.probe(Path(clip)).duration, talk, step)
+        zooms = {}
+        for segment in segments:
+            zoom = max(1., float(segment.zoom or 1.))
+            if abs(zoom - talk) > .02:
+                zooms.setdefault(zoom, []).append((segment.v_start, segment.v_start + segment.v_dur))
+        for zoom, spans in zooms.items():
+            merged = []
+            for start, end in sorted(spans):
+                if merged and start <= merged[-1][1] + .1:
+                    merged[-1] = (merged[-1][0], max(end, merged[-1][1]))
+                else:
+                    merged.append((start, end))
+            for start, end in merged:
+                out += _scan(Path(clip), start, end - start, zoom, step)
+    # 把精扫预算用在自然笑意和表情过渡，而非单纯追求最高的笑容系数。
     ref = _ref(out)
-    if sum(1 for m in out if not face_problems(m, ref) and cover_faces.smiling(m)) < want:
-        talk = float(config.load()["render"].get("talk_zoom", 1.0))
-        for clip, spans in used.items():
-            out += _scan(Path(clip), 0.0, media.probe(Path(clip)).duration, talk, 0.25, spans)
-    # 在最有希望的几个瞬间附近细找，捕捉自然微笑，避免只抽到说话嘴型。
-    ref = _ref(out)
-    # 在表情过渡的瞬间加密检查；精扫种子允许更大的口部变化，最终仍检查自然程度。
-    camera = [m for m in out if not [problem for problem in face_problems(m, ref) if problem != "张嘴说话、露齿大笑或嘴型夸张"]]
-    promising = sorted(camera, key=lambda m: (m["smile_confidence"], face_score(m, ref)), reverse=True)
-    neutral = sorted((m for m in out if not face_problems(m, ref)), key=lambda m: face_score(m, ref), reverse=True)
-    centers = []
-    for m in promising:
-        if any(old["clip"] == m["clip"] and abs(old["t"] - m["t"]) < .6 for old in centers):
-            continue
-        centers.append(m)
-        if len(centers) >= 4:
-            break
-    for m in neutral:
-        if any(old["clip"] == m["clip"] and abs(old["t"] - m["t"]) < .6 for old in centers):
-            continue
-        centers.append(m)
-        if len(centers) >= 6:
-            break
-    for m in centers:
-        start = max(0., m["t"] - .16)
-        out += _scan(Path(m["clip"]), start, .34, m["zoom"], .04)
+    for m in _refinement_centers(out, ref):
+        start = max(0., m["t"] - .35)
+        out += _scan(Path(m["clip"]), start, .72, m["zoom"], .025)
     # 同一个原始视频帧可能来自粗扫和精扫；只保留一次。
     out = list({(m["clip"], m["zoom"], m["t"]): m for m in out}.values())
     ref = _ref(out)
@@ -420,8 +457,8 @@ def candidates(segs, step: float = 0.2, want: int = 6) -> tuple[list[dict], dict
 
 
 def make_best_cover(segs, lines: list[str], out_png: Path, *, settings: dict | None = None,
-                    max_tries: int = 8, source_out: Path | None = None) -> Path:
-    """先选看镜头、表情放松的自然微笑；没有时选自然表情并记录说明。"""
+                    max_tries: int = 12, source_out: Path | None = None) -> Path:
+    """优选帧先统一高清复评，再选自然微笑，最后只为靠前的合格帧抠图。"""
     import json
 
     _birefnet()
@@ -431,16 +468,20 @@ def make_best_cover(segs, lines: list[str], out_png: Path, *, settings: dict | N
     cands, ref = candidates(segs)
     ranked = sorted((m for m in cands if not face_problems(m, ref)),
                     key=lambda m: (cover_faces.smiling(m), face_score(m, ref)), reverse=True)
-    log = {"selector": "camera-relaxed-smile-v3", "candidates": len(cands), "ref": ref,
+    # 先比较不同瞬间，再补查同一瞬间的邻帧，防止前几个名额全部落在同一张嘴型上。
+    diverse, neighbors = [], []
+    for m in ranked:
+        if any(old["clip"] == m["clip"] and old["zoom"] == m["zoom"] and abs(old["t"] - m["t"]) < .20 for old in diverse):
+            neighbors.append(m)
+        else:
+            diverse.append(m)
+    log = {"selector": "camera-smile-hd-review-v4", "candidates": len(cands), "ref": ref,
            "passed_first_check": len(ranked), "smile_candidates": sum(cover_faces.smiling(m) for m in ranked), "tries": []}
     out_png.parent.mkdir(parents=True, exist_ok=True)
     record = out_png.with_name("cover_check.json")
-    tried = []
-    for m in ranked:
+    reviewed = []
+    for m in (diverse + neighbors)[:max_tries]:
         cancellation.check()
-        if len(log["tries"]) >= max_tries:
-            break
-        tried.append(m)
         entry = {"clip": Path(m["clip"]).name, "t": m["t"], "zoom": m["zoom"], "score": round(face_score(m, ref), 3)}
         log["tries"].append(entry)
         try:
@@ -453,13 +494,20 @@ def make_best_cover(segs, lines: list[str], out_png: Path, *, settings: dict | N
         entry.update(problems=problems, face={k: v for k, v in (fm or {}).items() if k != "oval"})
         if problems:
             continue
+        hd = {**(fm or {}), "stable_neighbors": m.get("stable_neighbors", 0)}
+        is_smile, hd_score = cover_faces.smiling(hd), face_score(hd, ref)
+        entry.update(hd_score=round(hd_score, 3), expression="smile" if is_smile else "natural")
+        reviewed.append((is_smile, hd_score, m, fm, entry))
+    log["passed_hd_check"] = len(reviewed)
+    log["hd_smile_candidates"] = sum(item[0] for item in reviewed)
+    for is_smile, _, m, fm, entry in sorted(reviewed, key=lambda item: item[:2], reverse=True):
+        cancellation.check()
         img = _grab(Path(m["clip"]), m["t"], m["zoom"], W, H, settings=settings)
         mask, info = _person_mask(img, fm.get("oval") if fm else None)
         entry["mask"] = info
-        problems.extend(mask_problems(info))
-        if problems:
+        entry["problems"].extend(mask_problems(info))
+        if entry["problems"]:
             continue
-        is_smile = cover_faces.smiling(fm)
         note = "" if is_smile else "未找到看向镜头且微笑自然的合适画面，已选用看向镜头、表情放松的帧。"
         log["chosen"] = {"clip": entry["clip"], "t": m["t"], "zoom": m["zoom"], "ok": True,
                          "mode": "smile" if is_smile else "natural", "mouth_policy": "relaxed_smile", "note": note}

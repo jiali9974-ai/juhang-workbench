@@ -18,7 +18,8 @@ def metrics(img: np.ndarray) -> dict | None:
 
     global _landmarker
     h, w = img.shape[:2]
-    k = min(1.0, 540 / w)
+    # 高清复检保留足够眼部细节；整帧一律压到 540 会让眼镜后的虹膜只剩几个像素。
+    k = min(1.0, 960 / w)
     small = cv2.resize(img, (round(w * k), round(h * k))) if k < 1 else img
     with _lock:
         if _landmarker is None:
@@ -52,10 +53,13 @@ def metrics(img: np.ndarray) -> dict | None:
     if len(mouth_pixels) >= 8:
         high, low = mouth_pixels.max(axis=1), mouth_pixels.min(axis=1)
         bright_ratio = float(((low > 150) & (high - low < high * .18)).mean())
-    iris = []
-    for center, a, b in ((468, 33, 133), (473, 362, 263)):
+    iris, iris_y, iris_valid = [], [], True
+    for center, a, b, upper, lower in ((468, 33, 133, 159, 145), (473, 362, 263, 386, 374)):
         axis = p[b] - p[a]
         iris.append(float((p[center] - p[a]) @ axis / max(1., axis @ axis)))
+        vertical_axis = p[lower] - p[upper]
+        iris_y.append(float((p[center] - p[upper]) @ vertical_axis / max(.01, vertical_axis @ vertical_axis)))
+        iris_valid = iris_valid and dist(a, b) >= 8 and dist(upper, lower) >= 1.5
     horizontal = [(blend["eyeLookInLeft"] - blend["eyeLookOutLeft"]),
                   (blend["eyeLookOutRight"] - blend["eyeLookInRight"])]
     vertical = [blend["eyeLookDownLeft"] - blend["eyeLookUpLeft"],
@@ -84,6 +88,8 @@ def metrics(img: np.ndarray) -> dict | None:
         "gaze_horizontal": round(float(np.mean(horizontal)), 4), "gaze_vertical": round(float(np.mean(vertical)), 4),
         "gaze_eye_max": round(max(abs(value) for value in horizontal), 4),
         "iris_offset": round(max(abs(value - .5) for value in iris), 4),
+        "iris_horizontal": [round(value, 4) for value in iris],
+        "iris_vertical": [round(value, 4) for value in iris_y], "iris_valid": bool(iris_valid),
         "sharp": round(sharp, 2), "fw": round(float(x1 - x0) / sw, 4),
         "cx": round(float(x0 + x1) / 2 / sw, 4), "cy": round(float(y0 + y1) / 2 / sh, 4),
         "top": round(float(y0) / sh, 4), "oval": (oval / k).tolist(),
@@ -110,6 +116,22 @@ def smiling(m: dict | None) -> bool:
             and abs(m.get("smile_left", 0) - m.get("smile_right", 0)) <= .3)
 
 
+def camera_facing(m: dict) -> bool:
+    """镜头朝向的外观证据，不把动画表情系数当成校准过的视线角度。"""
+    if m.get("iris_valid") and len(m.get("iris_horizontal", [])) == len(m.get("iris_vertical", [])) == 2:
+        x, y = m["iris_horizontal"], m["iris_vertical"]
+        # 同时检查两只眼，不能只靠一只眼或平均值掩盖明显偏视。
+        centered = all(.30 <= value <= .70 for value in x) and all(.25 <= value <= .75 for value in y)
+        extreme = ((abs(m["gaze_horizontal"]) > .60 and max(abs(value - .5) for value in x) > .10)
+                   or (abs(m["gaze_vertical"]) > .75 and max(abs(value - .5) for value in y) > .15))
+        return centered and not extreme and abs(m["pose_yaw"]) <= 12 and abs(m["pose_pitch"]) <= 16
+    # 眼部像素不足时保留较保守的判断，不把无法判断的眼神算作已确认。
+    horizontal = abs(m["gaze_horizontal"])
+    centered = m["iris_offset"] <= .10 and abs(m["pose_yaw"]) <= 8
+    return ((horizontal <= .16 or (horizontal <= .20 and centered)) and abs(m["gaze_vertical"]) <= .18
+            and m["gaze_eye_max"] <= .28 and m["iris_offset"] <= .20)
+
+
 def problems(m: dict | None, ref: dict) -> list[str]:
     if m is None:
         return ["没有脸"]
@@ -124,11 +146,7 @@ def problems(m: dict | None, ref: dict) -> list[str]:
         bad.append("脸没有朝向镜头")
     if abs(m["pose_pitch"]) > 16 or abs(m["roll"]) > 9:
         bad.append("低头、仰头或头太歪")
-    horizontal = abs(m["gaze_horizontal"])
-    # 接近阈值时用虹膜与正脸交叉确认，避免眼镜反光、调色让单个视线系数轻微漂移。
-    centered = m["iris_offset"] <= .10 and abs(m["pose_yaw"]) <= 8
-    if ((horizontal > .16 and not (horizontal <= .20 and centered)) or abs(m["gaze_vertical"]) > .18
-            or m["gaze_eye_max"] > .28 or m["iris_offset"] > .20):
+    if not camera_facing(m):
         bad.append("眼神没有看向镜头")
     if not mouth_natural(m):
         bad.append("张嘴说话、露齿大笑或嘴型夸张")
@@ -140,7 +158,8 @@ def problems(m: dict | None, ref: dict) -> list[str]:
 
 
 def score(m: dict, ref: dict) -> float:
-    return (6 * min(m.get("smile_confidence", 0), .6) + .4 * m.get("stable_neighbors", 0)
+    # 笑意明确后不再持续奖励更强的笑容，给自然的轻微笑意、眼神和稳定性留出权重。
+    return (6 * min(m.get("smile_confidence", 0), .35) + .4 * m.get("stable_neighbors", 0)
             + 1.5 * max(0, 1 - abs(m.get("gaze_horizontal", 1)) / .16)
             + max(0, 1 - abs(m.get("pose_yaw", 90)) / 12)
             + .5 * max(0, 1 - abs(m.get("roll", 90)) / 9)
