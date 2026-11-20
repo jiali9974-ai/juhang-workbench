@@ -31,6 +31,7 @@ class Segment:
     a_start: float = 0.0                   # 独立音轨起点；裁掉停顿时声音与画面同步移动
     a_dur: float | None = None             # 片尾补留白时，音轨到原边界截止，再补静音，避免带入后一句
     v_content_dur: float | None = None     # 可用原画面长度；超出的片尾留白定格，不能读回口误画面
+    speech_spans: list[tuple[float, float]] = field(default_factory=list)  # 已保留字的时间，防止 VAD 把轻声尾字误裁掉
 
 
 # ---------------- 原声剪辑：句子里面剪掉口误、犹豫声、长停顿 ----------------
@@ -186,6 +187,22 @@ def deleted_ranges(line: dict, words: list | None) -> list[tuple[float, float]]:
     return result
 
 
+def kept_word_spans(line: dict, words: list | None, pieces: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    """保护保留字，范围仍受原声清理的 mask 限制，不能把删掉的字或拖音带回。"""
+    if not words:
+        return []
+    return [(max(a, words[i][1]), min(b, words[i][2]))
+            for i in _kept_word_indices(line, words) for a, b in pieces
+            if min(b, words[i][2]) > max(a, words[i][1])]
+
+
+def boundary_word_spans(spans: list[tuple[float, float]], start: float, end: float) -> list[tuple[float, float]]:
+    """只保护段首和段尾的字；句中无人声仍由实际音轨判断，避免识别时间覆盖掉真实停顿。"""
+    clipped = sorted((round(max(start, a) - start, 3), round(min(end, b) - start, 3))
+                     for a, b in spans if min(end, b) > max(start, a))
+    return clipped[:1] + clipped[-1:] if len(clipped) > 1 else clipped
+
+
 def subtract_ranges(start: float, end: float, deleted: list[tuple[float, float]]) -> list[tuple[float, float]]:
     result, cursor = [], start
     for a, b in sorted(deleted):
@@ -296,12 +313,14 @@ def plan(script: dict, progress=None) -> list[Segment]:
     max_chars = cfg["style"]["subtitle"]["max_chars_per_line"]
     material = config.material_root() / script["batch"]
     segs: list[Segment] = []
+    if scriptmod.fill_keep(script) and script.get("id"):
+        scriptmod.save(script)
+    line_pieces = _script_keep_pieces(script)
+    pieces_by_line = {id(l): pieces for l, pieces in line_pieces}
+    words_by_line = {id(l): kept_word_spans(l, line_words(script["batch"], l), pieces) for l, pieces in line_pieces}
 
     if cfg["render"].get("slip_trim", "audio") == "audio":
         # 先清理原声，再按明确删除的字同步裁掉画面；VAD 只负责剩余的无人声停顿。
-        if scriptmod.fill_keep(script) and script.get("id"):
-            scriptmod.save(script)
-        pieces_by_line = {id(l): pieces for l, pieces in _script_keep_pieces(script)}
         group: list[dict] = []
         groups: list[list[dict]] = []
         for l in script["lines"]:
@@ -327,6 +346,10 @@ def plan(script: dict, progress=None) -> list[Segment]:
                 lead = float(gap.get("first_lead", 0.02)) if gi == 0 else float(gap.get("lead", 0.05))
                 tail = float(gap.get("final_tail", 0.2) if gi == len(groups) - 1 else gap.get("tail", 0.05))
                 v0, v1 = tighten(material / g[0]["clip"], keep_iv[0][0], keep_iv[-1][1], lead, tail)
+                word_spans = [span for l in g for span in words_by_line[id(l)]]
+                if word_spans:
+                    v0 = min(v0, min(a for a, _ in word_spans))
+                    v1 = max(v1, max(b for _, b in word_spans))
             if not keep_iv:
                 continue
             deleted = [span for l in g for span in deleted_ranges(l, line_words(script["batch"], l))]
@@ -338,13 +361,12 @@ def plan(script: dict, progress=None) -> list[Segment]:
                 subs = [(round(max(a, x) - a, 3), round(min(b, y) - a, 3), text)
                         for x, y, text in subtitles if min(b, y) > max(a, x)]
                 segs.append(Segment(clip=clip, v_start=a, v_dur=round(b - a, 3), audio_wav=audio,
-                                    a_start=round(a - v0, 3), subs=subs, zoom=g[0].get("zoom")))
+                                    a_start=round(a - v0, 3), subs=subs, zoom=g[0].get("zoom"),
+                                    speech_spans=boundary_word_spans(word_spans, a, b)))
     else:
         # 画面也一起剪（跳剪）：每句只用真正要的时间段
-        if scriptmod.fill_keep(script) and script.get("id"):
-            scriptmod.save(script)
         flat: list[tuple[dict, float, float]] = []          # (句子, 素材起点, 素材终点)
-        for l, pieces in _script_keep_pieces(script):
+        for l, pieces in line_pieces:
             for a, b in pieces:
                 flat.append((l, a, b))
         if flat:                                            # 开头第一幕直接从第一个字开口的地方开始
@@ -374,6 +396,7 @@ def plan(script: dict, progress=None) -> list[Segment]:
         prev = None
         for (l0, a, b, parts), st in zip(runs, seg_starts):
             seg = Segment(clip=material / l0["clip"], v_start=a, v_dur=b - a, zoom=l0.get("zoom"))
+            seg.speech_spans = boundary_word_spans([span for l, _, _ in parts for span in words_by_line[id(l)]], a, b)
             for x0, x1, text in subs_global:
                 c0, c1 = max(x0, st), min(x1, st + seg.v_dur)
                 if c1 - c0 > 0.05:
@@ -412,7 +435,8 @@ def apply_speech_timing(segs: list[Segment], progress=None) -> list[Segment]:
         audio = _clip_audio(source, start, seg.v_dur)
         voices = speech_timing.detect(audio, AUDIO_SR)
         if voices:
-            voiced.append((seg, voices))
+            # 先有实际人声证据，再用已选字保护较轻的声母、尾音；纯无声段不能靠识别文字复活。
+            voiced.append((seg, voices + seg.speech_spans))
     result = []
     for index, (seg, voices) in enumerate(voiced):
         ranges = speech_timing.retained_ranges(voices, seg.v_dur, threshold=threshold, lead=lead, tail=tail,
@@ -427,6 +451,8 @@ def apply_speech_timing(segs: list[Segment], progress=None) -> list[Segment]:
                                   a_start=round(seg.a_start + a, 3),
                                   a_dur=round(max(0.0, min(b, seg.v_dur, seg.a_dur if seg.a_dur is not None else seg.v_dur) - a), 3),
                                   v_content_dur=round(max(0.0, min(b, seg.v_dur, seg.v_content_dur if seg.v_content_dur is not None else seg.v_dur) - a), 3),
+                                  speech_spans=[(round(max(a, x) - a, 3), round(min(b, y) - a, 3))
+                                                for x, y in seg.speech_spans if min(b, y) > max(a, x)],
                                   subs=subs))
     return result
 
@@ -734,7 +760,8 @@ def render(script: dict, progress=None, on_stage=None, *, settings: dict | None 
         "version": 1, "script": script["id"],
         "segments": [{"clip": str(s.clip), "start": s.v_start, "duration": s.v_dur,
                       "video_content_duration": s.v_content_dur, "audio": str(s.audio_wav) if s.audio_wav else None,
-                      "audio_start": s.a_start, "audio_duration": s.a_dur, "subtitles": s.subs} for s in segs],
+                      "audio_start": s.a_start, "audio_duration": s.a_dur, "speech_spans": s.speech_spans,
+                      "subtitles": s.subs} for s in segs],
     }, ensure_ascii=False, indent=2), encoding="utf-8")
     out_dir = config.output_root() / script["batch"]
     out_dir.mkdir(parents=True, exist_ok=True)

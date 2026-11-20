@@ -81,6 +81,26 @@ class SpeechTimingTests(unittest.TestCase):
                          [(.05, .55), (.85, 1.25)])
         self.assertEqual(speech_timing.retained_ranges([(.1, .5), (.85, 1.2)], 2, threshold=.35), [(.05, 1.25)])
 
+    def test_vad_cannot_cut_off_an_aligned_quiet_last_word(self):
+        seg = render.Segment(self.root / "source.mov", 2, 1, speech_spans=[(.1, .6), (.6, .95)])
+        with patch.object(render, "_clip_audio", return_value=np.ones((48000, 2), np.float32)), \
+             patch.object(speech_timing, "detect", return_value=[(.1, .6)]):
+            actual, = render.apply_speech_timing([seg])
+        self.assertAlmostEqual(actual.v_start + actual.v_dur, 3.15)
+        self.assertEqual(actual.speech_spans[-1], (.52, .87))
+        with patch.object(render, "_clip_audio", return_value=np.zeros((48000, 2), np.float32)):
+            self.assertEqual(render.apply_speech_timing([seg]), [])
+
+    def test_word_protection_does_not_restore_an_internal_idle_gap(self):
+        words = [(.1, .2), (.2, .9), (1.5, 1.8), (1.8, 1.9)]
+        seg = render.Segment(self.root / "source.mov", 0, 2, speech_spans=render.boundary_word_spans(words, 0, 2))
+        self.cfg["render"]["silence_cut"]["threshold"] = .35
+        with patch.object(render, "_clip_audio", return_value=np.ones((96000, 2), np.float32)), \
+             patch.object(speech_timing, "detect", return_value=[(.1, .4), (1.5, 1.9)]):
+            first, last = render.apply_speech_timing([seg])
+        self.assertAlmostEqual(first.v_start + first.v_dur, .45)
+        self.assertEqual(last.v_start, 1.45)
+
     def test_final_segment_has_point_two_seconds_and_internal_tail_stays_point_zero_five(self):
         for explicit in (True, False):
             with self.subTest(explicit_config=explicit):
