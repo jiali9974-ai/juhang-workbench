@@ -63,7 +63,7 @@ def detect(audio: np.ndarray, sr: int) -> list[tuple[float, float]]:
 
 def retained_ranges(spans: list[tuple[float, float]], duration: float, *, threshold: float = 1.0,
                     lead: float = .05, tail: float = .05, first_lead: float | None = None) -> list[tuple[float, float]]:
-    """相对音轨的保留区间；阈值判断在加余量之前，恰好 1 秒的停顿不裁。"""
+    """相对音轨的保留区间；阈值判断在加余量之前，恰好等于阈值的停顿不裁。"""
     voices: list[list[float]] = []
     for a, b in sorted(spans):
         a, b = max(0.0, a), min(duration, b)
@@ -74,12 +74,12 @@ def retained_ranges(spans: list[tuple[float, float]], duration: float, *, thresh
         else:
             voices.append([a, b])
     if not voices:
-        return [(0.0, duration)]
+        return []
     ranges = []
     start = max(0.0, voices[0][0] - (lead if first_lead is None else first_lead))
     for (_, end), (next_start, _) in zip(voices, voices[1:]):
         if next_start - end > threshold + 1e-9:
             ranges.append((start, min(duration, end + tail)))
             start = max(0.0, next_start - lead)
-    ranges.append((start, voices[-1][1] + tail))
+    ranges.append((start, min(duration, voices[-1][1] + tail)))
     return [(round(a, 3), round(b, 3)) for a, b in ranges if b > a]

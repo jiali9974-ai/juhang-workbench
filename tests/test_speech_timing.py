@@ -33,11 +33,53 @@ class SpeechTimingTests(unittest.TestCase):
 
     def test_unsorted_overlapping_voice_regions_do_not_create_false_cuts(self):
         self.assertEqual(speech_timing.retained_ranges([(1, 2), (.2, 1.2), (.4, .3)], 3), [(.15, 2.05)])
-        self.assertEqual(speech_timing.retained_ranges([], 3), [(0, 3)])
+        self.assertEqual(speech_timing.retained_ranges([], 3), [])
 
     def test_first_lead_does_not_change_padding_at_internal_cuts(self):
         self.assertEqual(speech_timing.retained_ranges([(.2, .8), (2, 2.5)], 3, first_lead=.02),
                          [(.18, .85), (1.95, 2.55)])
+
+    def test_short_deleted_words_cut_video_even_without_a_long_silence(self):
+        line = {"clip": "source.mov", "start": 0, "end": 1, "src_text": "这只嗯表", "keep": "这只表",
+                "subtitle": "这只表", "zoom": 1,
+                "words": [["这", 0, .2], ["只", .2, .4], ["嗯", .4, .7], ["表", .7, 1]]}
+        cleaned = self.root / "cleaned.wav"
+        with patch.object(render, "tighten", return_value=(0, 1)), \
+             patch.object(render, "clean_audio", return_value=cleaned), \
+             patch.object(render, "apply_speech_timing", side_effect=lambda segs, progress: segs):
+            first, last = render.plan({"batch": "test", "lines": [line]})
+        self.assertEqual((first.v_start, first.v_dur, first.a_start), (0, .4, 0))
+        self.assertEqual((last.v_start, last.v_dur, last.a_start), (.7, .3, .7))
+        self.assertEqual(first.audio_wav, cleaned)
+        self.assertEqual(last.audio_wav, cleaned)
+        self.assertEqual(first.subs, [(0, .4, "这只表")])
+        self.assertEqual(last.subs, [(0, .3, "这只表")])
+
+    def test_no_voice_segments_are_dropped_and_padding_uses_first_and_last_survivors(self):
+        segs = [render.Segment(self.root / "source.mp4", start, 1) for start in (0, 1, 2)]
+        with patch.object(render, "_clip_audio", return_value=np.ones((48000, 2), np.float32)), \
+             patch.object(speech_timing, "detect", side_effect=[[], [(.2, .7)], []]):
+            result = render.apply_speech_timing(segs)
+        self.assertEqual(len(result), 1)
+        self.assertEqual((result[0].v_start, result[0].v_dur), (1.18, .72))
+        with patch.object(render, "_clip_audio", return_value=np.zeros((48000, 2), np.float32)):
+            self.assertEqual(render.apply_speech_timing(segs), [])
+
+    def test_keep_alignment_failure_cannot_fall_back_to_restoring_source_words(self):
+        for words, keep in (([["好", 0, .3]], "很好"), ([["重复", 0, .3]], "复")):
+            with self.subTest(words=words), self.assertRaises(ValueError):
+                render.keep_pieces({"clip": "a.mov", "start": 0, "end": .3, "keep": keep}, words)
+        with self.assertRaisesRegex(ValueError, "缺少逐字时间"):
+            render.keep_pieces({"clip": "a.mov", "start": 0, "end": 1, "keep": "好", "src_text": "嗯好"}, None)
+
+    def test_retained_padding_never_passes_source_boundary(self):
+        self.assertEqual(speech_timing.retained_ranges([(.2, 1)], 1), [(.15, 1)])
+        self.assertEqual(render.subtract_ranges(0, 2, [(.8, 1.2), (.6, 1)]), [(0, .6), (1.2, 2)])
+
+    def test_subsecond_idle_gap_is_cut_at_configured_threshold(self):
+        self.assertEqual(speech_timing.retained_ranges([(.1, .5), (.9, 1.2)], 2, threshold=.35),
+                         [(.05, .55), (.85, 1.25)])
+        self.assertEqual(speech_timing.retained_ranges([(.1, .5), (.85, 1.2)], 2, threshold=.35), [(.05, 1.25)])
 
     def test_final_segment_has_point_two_seconds_and_internal_tail_stays_point_zero_five(self):
         for explicit in (True, False):
@@ -115,6 +157,29 @@ class SpeechTimingTests(unittest.TestCase):
             last = render.apply_speech_timing([seg])[0]
         self.assertEqual(last.v_dur, 1.2)
         self.assertEqual(last.a_dur, 1)
+        self.assertEqual(last.v_content_dur, 1)
+
+    def test_final_blank_freezes_retained_picture_instead_of_importing_deleted_frames(self):
+        video, wav = self.root / "colors.mp4", self.root / "voice.wav"
+        sf.write(wav, np.full((24000, 2), .1, np.float32), 48000)
+        media.run_ffmpeg(["-f", "lavfi", "-i", "color=c=red:s=90x160:r=60:d=0.5",
+                          "-f", "lavfi", "-i", "color=c=blue:s=90x160:r=60:d=0.5",
+                          "-filter_complex", "[0:v][1:v]concat=n=2:v=1:a=0[v]", "-map", "[v]",
+                          "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", str(video)])
+        with patch.object(speech_timing, "detect", return_value=[(.02, .5)]):
+            seg, = render.apply_speech_timing([render.Segment(video, 0, .5, audio_wav=wav, zoom=1)])
+        output = self.root / "frozen.mp4"
+        render.encode_segment(seg, output, look.normalize({"enabled": False}))
+        import cv2
+        capture = cv2.VideoCapture(str(output))
+        try:
+            capture.set(cv2.CAP_PROP_POS_MSEC, 600)
+            ok, frame = capture.read()
+        finally:
+            capture.release()
+        self.assertTrue(ok)
+        self.assertGreater(float(frame[:, :, 2].mean()), 220)
+        self.assertLess(float(frame[:, :, 0].mean()), 20)
 
     def test_detector_bounds_its_output_and_reuses_audio_analysis(self):
         detector = SimpleNamespace(generate=lambda **kwargs: [{"value": [[-1, 50], [100, 500], [700, 1200], [1500, 2000]]}])

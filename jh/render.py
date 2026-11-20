@@ -30,6 +30,7 @@ class Segment:
     face: bool | None = None              # 这段画面有没有人脸（决定要不要磨皮）；None = 出片时再判断
     a_start: float = 0.0                   # 独立音轨起点；裁掉停顿时声音与画面同步移动
     a_dur: float | None = None             # 片尾补留白时，音轨到原边界截止，再补静音，避免带入后一句
+    v_content_dur: float | None = None     # 可用原画面长度；超出的片尾留白定格，不能读回口误画面
 
 
 # ---------------- 原声剪辑：句子里面剪掉口误、犹豫声、长停顿 ----------------
@@ -70,8 +71,6 @@ def line_words(batch: str, l: dict) -> list | None:
 
 def _kept_word_indices(l: dict, words: list) -> list[int]:
     """从后往前对齐保留原话，返回真正保留的非标点字。"""
-    import difflib
-
     chars, owner = [], []                  # 每个（非标点）字属于哪个 word
     for wi, (w, _, _) in enumerate(words):
         for ch in scriptmod._bare(w):
@@ -92,11 +91,12 @@ def _kept_word_indices(l: dict, words: list) -> list[int]:
     if pos is not None:
         for k in pos:
             kept[owner[k]] = True
-    else:                                  # keep 不是原话删字得来的（旧数据）：退回模糊对齐
-        sm = difflib.SequenceMatcher(None, "".join(chars), keep, autojunk=False)
-        for a, _, n in sm.get_matching_blocks():
-            for k in range(a, a + n):
-                kept[owner[k]] = True
+    else:
+        raise ValueError(f"{l.get('clip', '')} {l.get('start', 0):.2f} 秒：保留原话无法与逐字时间对齐，请重新识别或修正 keep")
+    # 一个识别 token 内只有一套起止时间，不能把其中未选中的字也整词带回。
+    for wi in set(owner[k] for k in pos):
+        if sum(owner[k] == wi for k in pos) != len(scriptmod._bare(words[wi][0])):
+            raise ValueError(f"{l.get('clip', '')}：无法精确剪开识别词 {words[wi][0]!r}，请重新识别后再出片")
     real = [i for i, (w, _, _) in enumerate(words) if not _is_punct(w) and kept[i]]
     # 句首、句尾的犹豫声不要（嗯、呃……；句首的“啊”也不要）
     while real and (scriptmod._bare(words[real[0]][0]) in HESITATION or (scriptmod._bare(words[real[0]][0]) == "啊" and len(real) > 1)):
@@ -110,6 +110,10 @@ def keep_pieces(l: dict, words: list | None, *, final: bool = False,
                 trim_lead: bool = False, trim_tail: bool = False) -> list[tuple[float, float]]:
     """这句原话真正要用的时间段；口误旁边的余量只能补底噪，不能取回已删除的原声。"""
     if not words:
+        if not scriptmod._bare(l.get("keep") or l.get("src_text") or ""):
+            return []
+        if l.get("keep") and scriptmod._bare(l["keep"]) != scriptmod._bare(l.get("src_text", "")):
+            raise ValueError(f"{l.get('clip', '')}：缺少逐字时间，无法剪掉口误，请重新识别素材")
         return [(max(0.0, l["start"] - (0 if trim_lead else 0.08)), l["end"] + (0 if trim_tail else 0.12))]
     real = _kept_word_indices(l, words)
     if not real:
@@ -161,6 +165,38 @@ def _script_keep_pieces(script: dict) -> list[tuple[dict, list[tuple[float, floa
                            trim_lead=i > 0 and adjacent(lines[i - 1], l) and deleted_edges[i - 1][1],
                            trim_tail=i + 1 < len(lines) and adjacent(l, lines[i + 1]) and deleted_edges[i + 1][0]))
             for i, (l, ws) in enumerate(zip(lines, words))]
+
+
+def deleted_ranges(line: dict, words: list | None) -> list[tuple[float, float]]:
+    """明确删除的口误及其两侧停顿；无论长短都同步删除画面，不交给 VAD 猜。"""
+    if not words:
+        return []
+    kept = set(_kept_word_indices(line, words))
+    real = [i for i, w in enumerate(words) if not _is_punct(w[0])]
+    result, previous, deleting = [], float(line["start"]), False
+    for i in real:
+        if i in kept:
+            if deleting:
+                result.append((previous, float(words[i][1])))
+            previous, deleting = float(words[i][2]), False
+        else:
+            deleting = True
+    if deleting:
+        result.append((previous, max(float(line["end"]), float(words[real[-1]][2]))))
+    return result
+
+
+def subtract_ranges(start: float, end: float, deleted: list[tuple[float, float]]) -> list[tuple[float, float]]:
+    result, cursor = [], start
+    for a, b in sorted(deleted):
+        if b <= cursor or a >= end:
+            continue
+        if a > cursor:
+            result.append((cursor, min(a, end)))
+        cursor = max(cursor, b)
+    if cursor < end:
+        result.append((cursor, end))
+    return [(round(a, 3), round(b, 3)) for a, b in result if b - a >= .001]
 
 
 # ---------------- 字幕切分 ----------------
@@ -262,8 +298,7 @@ def plan(script: dict, progress=None) -> list[Segment]:
     segs: list[Segment] = []
 
     if cfg["render"].get("slip_trim", "audio") == "audio":
-        # 口误处保留连续画面，删掉的声音换成素材自己的环境底噪；
-        # 超过阈值的无人声停顿在分段规划完成后统一同步裁掉音画。
+        # 先清理原声，再按明确删除的字同步裁掉画面；VAD 只负责剩余的无人声停顿。
         if scriptmod.fill_keep(script) and script.get("id"):
             scriptmod.save(script)
         pieces_by_line = {id(l): pieces for l, pieces in _script_keep_pieces(script)}
@@ -292,13 +327,18 @@ def plan(script: dict, progress=None) -> list[Segment]:
                 lead = float(gap.get("first_lead", 0.02)) if gi == 0 else float(gap.get("lead", 0.05))
                 tail = float(gap.get("final_tail", 0.2) if gi == len(groups) - 1 else gap.get("tail", 0.05))
                 v0, v1 = tighten(material / g[0]["clip"], keep_iv[0][0], keep_iv[-1][1], lead, tail)
-            seg = Segment(clip=material / g[0]["clip"], v_start=v0, v_dur=v1 - v0, zoom=g[0].get("zoom"))
-            seg.audio_wav = clean_audio(script["batch"], seg.clip, v0, v1 - v0, keep_iv)
-            for l in g:
-                a, b = max(0.0, l["start"] - v0), min(v1 - v0, l["end"] - v0)
-                if b - a > 0.2:
-                    seg.subs += timed_chunks(l["subtitle"], a, b, max_chars)
-            segs.append(seg)
+            if not keep_iv:
+                continue
+            deleted = [span for l in g for span in deleted_ranges(l, line_words(script["batch"], l))]
+            clip = material / g[0]["clip"]
+            audio = clean_audio(script["batch"], clip, v0, v1 - v0, keep_iv)
+            # 字幕先按原时间排，再随音画裁剪；不会把每一小段都重新铺一遍整句字幕。
+            subtitles = [sub for l in g for sub in timed_chunks(l["subtitle"], l["start"], l["end"], max_chars)]
+            for a, b in subtract_ranges(v0, v1, deleted):
+                subs = [(round(max(a, x) - a, 3), round(min(b, y) - a, 3), text)
+                        for x, y, text in subtitles if min(b, y) > max(a, x)]
+                segs.append(Segment(clip=clip, v_start=a, v_dur=round(b - a, 3), audio_wav=audio,
+                                    a_start=round(a - v0, 3), subs=subs, zoom=g[0].get("zoom")))
     else:
         # 画面也一起剪（跳剪）：每句只用真正要的时间段
         if scriptmod.fill_keep(script) and script.get("id"):
@@ -309,7 +349,7 @@ def plan(script: dict, progress=None) -> list[Segment]:
                 flat.append((l, a, b))
         if flat:                                            # 开头第一幕直接从第一个字开口的地方开始
             l, a, b = flat[0]
-            flat[0] = (l, min(opening_start(material / l["clip"], a), b - 0.1), b)
+            flat[0] = (l, max(a, min(opening_start(material / l["clip"], a), b - 0.1)), b)
         # 同一素材里首尾相接的片段合并成一段，减少切点
         runs: list[list] = []
         for l, a, b in flat:
@@ -344,6 +384,8 @@ def plan(script: dict, progress=None) -> list[Segment]:
             segs.append(seg)
             prev = seg
     segs = apply_speech_timing(segs, progress)
+    if not segs:
+        raise ValueError("所选片段没有检测到有效人声，请检查素材、识别时间或重新生成脚本")
     rcfg = cfg["render"]
     for s in segs:
         if s.zoom is None:
@@ -360,18 +402,22 @@ def apply_speech_timing(segs: list[Segment], progress=None) -> list[Segment]:
 
     cfg = config.load()["render"]
     gap = cfg.get("segment_gap") or {}
-    threshold = float((cfg.get("silence_cut") or {}).get("threshold", 1.0))
+    threshold = float((cfg.get("silence_cut") or {}).get("threshold", .35))
     lead, tail = float(gap.get("lead", .05)), float(gap.get("tail", .05))
-    result = []
+    voiced = []
     for index, seg in enumerate(segs):
         if progress:
             progress(index, len(segs), f"裁剪无人声停顿 {index + 1}/{len(segs)}")
         source, start = (seg.audio_wav, seg.a_start) if seg.audio_wav else (seg.clip, seg.v_start)
         audio = _clip_audio(source, start, seg.v_dur)
         voices = speech_timing.detect(audio, AUDIO_SR)
+        if voices:
+            voiced.append((seg, voices))
+    result = []
+    for index, (seg, voices) in enumerate(voiced):
         ranges = speech_timing.retained_ranges(voices, seg.v_dur, threshold=threshold, lead=lead, tail=tail,
                                                first_lead=float(gap.get("first_lead", .02)) if index == 0 else lead)
-        if voices and index == len(segs) - 1:
+        if index == len(voiced) - 1:
             a, _ = ranges[-1]
             ranges[-1] = (a, round(max(b for _, b in voices) + float(gap.get("final_tail", .2)), 3))
         for a, b in ranges:
@@ -380,6 +426,7 @@ def apply_speech_timing(segs: list[Segment], progress=None) -> list[Segment]:
             result.append(replace(seg, v_start=round(seg.v_start + a, 3), v_dur=round(b - a, 3),
                                   a_start=round(seg.a_start + a, 3),
                                   a_dur=round(max(0.0, min(b, seg.v_dur, seg.a_dur if seg.a_dur is not None else seg.v_dur) - a), 3),
+                                  v_content_dur=round(max(0.0, min(b, seg.v_dur, seg.v_content_dur if seg.v_content_dur is not None else seg.v_dur) - a), 3),
                                   subs=subs))
     return result
 
@@ -597,7 +644,8 @@ def encode_segment(seg: Segment, out: Path, settings: dict | None = None) -> Non
         filters.append(effects["tone"])
     filters.extend([f"fps={fps}", "setsar=1", "format=yuv420p", "tpad=stop_mode=clone:stop_duration=3"])
     vf = ",".join(filters)
-    source = ["-ss", f"{seg.v_start:.3f}", "-t", f"{seg.v_dur + 0.5:.3f}", "-i", str(seg.clip)]
+    content = min(seg.v_dur, seg.v_content_dur) if seg.v_content_dur is not None else seg.v_dur
+    source = ["-ss", f"{seg.v_start:.3f}", "-t", f"{content:.3f}", "-i", str(seg.clip)]
     voice = ["-ss", f"{seg.a_start:.3f}", "-i", str(seg.audio_wav)] if seg.audio_wav else []
     f = 0.012                              # 切点两边各淡 12 毫秒，剪掉口误后接上不会“咔”一声
     fades = f"afade=t=in:d={f},afade=t=out:st={max(0.0, seg.v_dur - f):.3f}:d={f}"
@@ -682,6 +730,12 @@ def render(script: dict, progress=None, on_stage=None, *, settings: dict | None 
     if on_stage:
         on_stage("look")
     segs = plan(script, progress)
+    (work / "edit_timeline.json").write_text(json.dumps({
+        "version": 1, "script": script["id"],
+        "segments": [{"clip": str(s.clip), "start": s.v_start, "duration": s.v_dur,
+                      "video_content_duration": s.v_content_dur, "audio": str(s.audio_wav) if s.audio_wav else None,
+                      "audio_start": s.a_start, "audio_duration": s.a_dur, "subtitles": s.subs} for s in segs],
+    }, ensure_ascii=False, indent=2), encoding="utf-8")
     out_dir = config.output_root() / script["batch"]
     out_dir.mkdir(parents=True, exist_ok=True)
     out = out_dir / f"{script['id']}.mp4"
