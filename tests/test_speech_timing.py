@@ -40,20 +40,69 @@ class SpeechTimingTests(unittest.TestCase):
                          [(.18, .85), (1.95, 2.55)])
 
     def test_short_deleted_words_cut_video_even_without_a_long_silence(self):
-        line = {"clip": "source.mov", "start": 0, "end": 1, "src_text": "这只嗯表", "keep": "这只表",
+        line = {"clip": "source.mov", "start": 0, "end": 2.7, "src_text": "这只嗯表", "keep": "这只表",
                 "subtitle": "这只表", "zoom": 1,
-                "words": [["这", 0, .2], ["只", .2, .4], ["嗯", .4, .7], ["表", .7, 1]]}
+                "words": [["这", 0, .6], ["只", .6, 1.2], ["嗯", 1.2, 1.5], ["表", 1.5, 2.7]]}
         cleaned = self.root / "cleaned.wav"
-        with patch.object(render, "tighten", return_value=(0, 1)), \
+        with patch.object(render, "tighten", return_value=(0, 2.7)), \
              patch.object(render, "clean_audio", return_value=cleaned), \
              patch.object(render, "apply_speech_timing", side_effect=lambda segs, progress: segs):
             first, last = render.plan({"batch": "test", "lines": [line]})
-        self.assertEqual((first.v_start, first.v_dur, first.a_start), (0, .4, 0))
-        self.assertEqual((last.v_start, last.v_dur, last.a_start), (.7, .3, .7))
+        self.assertEqual((first.v_start, first.v_dur, first.a_start), (0, 1.2, 0))
+        self.assertEqual((last.v_start, last.v_dur, last.a_start), (1.5, 1.2, 1.5))
         self.assertEqual(first.audio_wav, cleaned)
         self.assertEqual(last.audio_wav, cleaned)
-        self.assertEqual(first.subs, [(0, .4, "这只表")])
-        self.assertEqual(last.subs, [(0, .3, "这只表")])
+        self.assertEqual(first.subs, [(0, 1.2, "这只表")])
+        self.assertEqual(last.subs, [(0, 1.2, "这只表")])
+
+    def test_plan_drops_the_protected_point_four_five_second_fragment_after_silence_cut(self):
+        self.cfg["render"]["silence_cut"]["threshold"] = .35
+        line = {"clip": "source.mov", "start": 3.56, "end": 7.31, "src_text": "来我店里", "keep": "我店里",
+                "subtitle": "我店里", "zoom": 1,
+                "words": [["来", 3.56, 4.31], ["我", 4.31, 5.15], ["店", 5.15, 5.45], ["里", 5.45, 7.31]]}
+        cleaned = self.root / "cleaned.wav"
+        with patch.object(render, "tighten", return_value=(4.31, 7.31)), \
+             patch.object(render, "clean_audio", return_value=cleaned), \
+             patch.object(render, "_clip_audio", return_value=np.ones((144000, 2), np.float32)), \
+             patch.object(speech_timing, "detect", return_value=[(.78, 3)]):
+            actual, = render.plan({"batch": "test", "lines": [line]})
+        self.assertEqual((actual.v_start, actual.a_start, actual.v_dur), (5.04, .73, 2.47))
+        self.assertEqual((actual.a_dur, actual.v_content_dur), (2.27, 2.27))
+        self.assertEqual(actual.audio_wav, cleaned)
+        self.assertEqual(actual.subs, [(0, 2.27, "我店里")])
+
+    def test_plan_filters_final_shots_at_point_seven_seconds_and_retimes_captions(self):
+        line = {"clip": "source.mov", "start": 0, "end": 4, "src_text": "原话", "keep": "原话",
+                "subtitle": "原话", "zoom": 1}
+        candidates = [render.Segment(self.root / "source.mov", index * 10, duration, zoom=1,
+                                     audio_wav=self.root / "voice.wav", a_start=index * 10,
+                                     subs=[(0, duration, text)])
+                      for index, (duration, text) in enumerate([(.45, "删除甲"), (.7, "保留甲"),
+                                                               (.699, "删除乙"), (.701, "保留乙")])]
+        for trim in ("audio", "cut"):
+            with self.subTest(trim=trim):
+                self.cfg["render"]["slip_trim"] = trim
+                with patch.object(render, "line_words", return_value=None), \
+                     patch.object(render, "tighten", return_value=(0, 4)), \
+                     patch.object(render, "opening_start", return_value=0), \
+                     patch.object(render, "clean_audio", return_value=self.root / "voice.wav"), \
+                     patch.object(render, "apply_speech_timing", return_value=candidates):
+                    kept = render.plan({"batch": "test", "lines": [line]})
+                self.assertEqual(kept, [candidates[1], candidates[3]])
+                captions = self.root / "filtered.ass"
+                render.build_ass(kept, sum(seg.v_dur for seg in kept), captions)
+                text = captions.read_text(encoding="utf-8")
+                self.assertNotIn("删除甲", text)
+                self.assertNotIn("删除乙", text)
+                self.assertIn("Dialogue: 2,0:00:00.00,0:00:00.70,", text)
+                self.assertIn("Dialogue: 2,0:00:00.70,0:00:01.40,", text)
+
+    def test_plan_stops_when_all_final_shots_are_short(self):
+        for duration in (.45, .699):
+            with self.subTest(duration=duration), \
+                 patch.object(render, "apply_speech_timing", return_value=[render.Segment(self.root / "source.mov", 0, duration)]), \
+                 self.assertRaisesRegex(ValueError, r"裁剪后的片段均不足 0\.7 秒"):
+                render.plan({"batch": "test", "lines": []})
 
     def test_no_voice_segments_are_dropped_and_padding_uses_first_and_last_survivors(self):
         segs = [render.Segment(self.root / "source.mp4", start, 1) for start in (0, 1, 2)]

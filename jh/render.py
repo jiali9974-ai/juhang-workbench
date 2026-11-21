@@ -409,6 +409,10 @@ def plan(script: dict, progress=None) -> list[Segment]:
     segs = apply_speech_timing(segs, progress)
     if not segs:
         raise ValueError("所选片段没有检测到有效人声，请检查素材、识别时间或重新生成脚本")
+    # 按最终镜头时长过滤；整段删除时音轨和相对字幕一起移除，后续合成重新累计时间。
+    segs = [s for s in segs if s.v_dur >= 0.7]
+    if not segs:
+        raise ValueError("裁剪后的片段均不足 0.7 秒，已停止出片；请调整所选片段")
     rcfg = cfg["render"]
     for s in segs:
         if s.zoom is None:
