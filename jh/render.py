@@ -13,7 +13,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from . import cancellation, config, fonts, graphics, look, media, script as scriptmod
+from . import cancellation, config, fonts, graphics, look, media, script as scriptmod, short_segments
 
 PUNCT_STRIP = "，。,.！!？?、；;：: "
 
@@ -23,22 +23,21 @@ class Segment:
     clip: Path
     v_start: float
     v_dur: float
-    audio_wav: Path | None = None           # 清理口误后的原声音轨；None 表示直接使用素材音轨
+    audio_wav: Path | None = None           # 可选独立音轨；素材剪辑直接使用原视频声音
     subs: list[tuple[float, float, str]] = field(default_factory=list)  # 相对本段开头的时间
     zoom: float | None = None
-    punch: bool = False                   # 同一机位跳剪：这一段稍微放大一点，跳剪看起来是有意的
     face: bool | None = None              # 这段画面有没有人脸（决定要不要磨皮）；None = 出片时再判断
     a_start: float = 0.0                   # 独立音轨起点；裁掉停顿时声音与画面同步移动
     a_dur: float | None = None             # 片尾补留白时，音轨到原边界截止，再补静音，避免带入后一句
     v_content_dur: float | None = None     # 可用原画面长度；超出的片尾留白定格，不能读回口误画面
     speech_spans: list[tuple[float, float]] = field(default_factory=list)  # 已保留字的时间，防止 VAD 把轻声尾字误裁掉
+    source_lines: list[dict] = field(default_factory=list)  # 所属保留原话及逐字绝对时间；不以整句字幕代替短段文字
 
 
 # ---------------- 原声剪辑：句子里面剪掉口误、犹豫声、长停顿 ----------------
 
 HESITATION = set("嗯呃额哎诶唉")
-MAX_PAUSE, KEEP_PAUSE = 0.35, 0.20        # 句子里超过 0.35 秒的停顿压到 0.2 秒（停顿里的换气、杂音一起去掉）
-MAX_CHAR, KEEP_CHAR = 0.60, 0.40          # 拖得很长的字（“啊~~”或字后面带着杂音）只留 0.4 秒
+MAX_PROTECTED_WORD = 0.60               # 过长的单字时间可能包含残音和停顿，不能据此强制保留
 
 
 def _is_punct(w: str) -> bool:
@@ -107,9 +106,9 @@ def _kept_word_indices(l: dict, words: list) -> list[int]:
     return real
 
 
-def keep_pieces(l: dict, words: list | None, *, final: bool = False,
-                trim_lead: bool = False, trim_tail: bool = False) -> list[tuple[float, float]]:
-    """这句原话真正要用的时间段；口误旁边的余量只能补底噪，不能取回已删除的原声。"""
+def keep_pieces(l: dict, words: list | None, *, trim_lead: bool = False,
+                trim_tail: bool = False) -> list[tuple[float, float]]:
+    """保留原话的完整字音范围；停顿后续按原声检测，口误边界不回取已删除的声音。"""
     if not words:
         if not scriptmod._bare(l.get("keep") or l.get("src_text") or ""):
             return []
@@ -125,15 +124,14 @@ def keep_pieces(l: dict, words: list | None, *, final: bool = False,
     for i in range(first, last + 1):
         w, a, b = words[i]
         if _is_punct(w):
-            # 句子中间的停顿：前后的字都保留时才算停顿，超过 MAX_PAUSE 就压到 KEEP_PAUSE
+            # 连续原话里的标点间隔先保留，由实际原声检测统一决定是否同步剪掉。
             nxt_real = next((j for j in range(i + 1, last + 1) if not _is_punct(words[j][0])), None)
             if pieces and i - 1 in kept and nxt_real in kept:
-                pieces.append([a, a + (KEEP_PAUSE if b - a > MAX_PAUSE else b - a)])
+                pieces.append([a, b])
             continue
         if i not in kept:
             continue
-        # 片尾最后一个字保留完整尾音，不能先按拖音规则截短，再补片尾留白。
-        pieces.append([a, b if final and i == last else a + (KEEP_CHAR if b - a > MAX_CHAR else b - a)])
+        pieces.append([a, b])
     # 不能越过已删字的边界（包括隔着标点的口误）。正常切点的留白由后续人声裁剪补足。
     lead = 0 if trim_lead or any(not _is_punct(w[0]) for w in words[:first]) else 0.08
     tail = 0 if trim_tail or any(not _is_punct(w[0]) for w in words[last + 1:]) else 0.12
@@ -162,7 +160,7 @@ def _script_keep_pieces(script: dict) -> list[tuple[dict, list[tuple[float, floa
     def adjacent(left: dict, right: dict) -> bool:
         return left["clip"] == right["clip"] and -0.01 <= right["start"] - left["end"] <= 0.35
 
-    return [(l, keep_pieces(l, ws, final=i == len(lines) - 1,
+    return [(l, keep_pieces(l, ws,
                            trim_lead=i > 0 and adjacent(lines[i - 1], l) and deleted_edges[i - 1][1],
                            trim_tail=i + 1 < len(lines) and adjacent(l, lines[i + 1]) and deleted_edges[i + 1][0]))
             for i, (l, ws) in enumerate(zip(lines, words))]
@@ -188,7 +186,7 @@ def deleted_ranges(line: dict, words: list | None) -> list[tuple[float, float]]:
 
 
 def kept_word_spans(line: dict, words: list | None, pieces: list[tuple[float, float]]) -> list[tuple[float, float]]:
-    """保护保留字，范围仍受原声清理的 mask 限制，不能把删掉的字或拖音带回。"""
+    """已保留字的原始时间；保护范围仍不能越过明确删除的口误边界。"""
     if not words:
         return []
     return [(max(a, words[i][1]), min(b, words[i][2]))
@@ -197,10 +195,11 @@ def kept_word_spans(line: dict, words: list | None, pieces: list[tuple[float, fl
 
 
 def boundary_word_spans(spans: list[tuple[float, float]], start: float, end: float) -> list[tuple[float, float]]:
-    """只保护段首和段尾的字；句中无人声仍由实际音轨判断，避免识别时间覆盖掉真实停顿。"""
-    clipped = sorted((round(max(start, a) - start, 3), round(min(end, b) - start, 3))
+    """只保护可信的段首尾字；过长的单字时间交给原声检测，避免覆盖真实停顿。"""
+    clipped = sorted((round(max(start, a) - start, 3), round(min(end, b) - start, 3), b - a)
                      for a, b in spans if min(end, b) > max(start, a))
-    return clipped[:1] + clipped[-1:] if len(clipped) > 1 else clipped
+    edges = clipped[:1] + clipped[-1:] if len(clipped) > 1 else clipped
+    return [(a, b) for a, b, duration in edges if duration <= MAX_PROTECTED_WORD + 1e-9]
 
 
 def subtract_ranges(start: float, end: float, deleted: list[tuple[float, float]]) -> list[tuple[float, float]]:
@@ -308,7 +307,7 @@ def has_face(clip: Path, t: float) -> bool:
 
 # ---------------- 规划分段 ----------------
 
-def plan(script: dict, progress=None) -> list[Segment]:
+def plan(script: dict, progress=None, *, short_report: dict | None = None) -> list[Segment]:
     cfg = config.load()
     max_chars = cfg["style"]["subtitle"]["max_chars_per_line"]
     material = config.material_root() / script["batch"]
@@ -318,113 +317,69 @@ def plan(script: dict, progress=None) -> list[Segment]:
     line_pieces = _script_keep_pieces(script)
     pieces_by_line = {id(l): pieces for l, pieces in line_pieces}
     words_by_line = {id(l): kept_word_spans(l, line_words(script["batch"], l), pieces) for l, pieces in line_pieces}
+    source_by_line = {}
+    for index, (line, _) in enumerate(line_pieces):
+        words = line_words(script["batch"], line)
+        source_by_line[id(line)] = {"id": index, "ref": line.get("ref", ""),
+                                   "text": line.get("keep") or line.get("src_text", ""),
+                                   "lang": line.get("src_lang", "unknown"),
+                                   "start": line["start"], "end": line["end"],
+                                   "words": [words[i] for i in _kept_word_indices(line, words)] if words else None}
 
-    if cfg["render"].get("slip_trim", "audio") == "audio":
-        # 先清理原声，再按明确删除的字同步裁掉画面；VAD 只负责剩余的无人声停顿。
-        group: list[dict] = []
-        groups: list[list[dict]] = []
-        for l in script["lines"]:
-            if group and (l["clip"] != group[-1]["clip"] or l["start"] - group[-1]["end"] > 0.35
-                          or l["start"] < group[-1]["end"] - 0.01 or l.get("zoom") != group[-1].get("zoom")):
-                groups.append(group)
-                group = []
-            group.append(l)
-        if group:
+    # 统一同步裁剪原视频和原声；同一素材的连续句子先归组，避免句间留白重复播放。
+    group: list[dict] = []
+    groups: list[list[dict]] = []
+    for l in script["lines"]:
+        if group and (l["clip"] != group[-1]["clip"] or l["start"] - group[-1]["end"] > 0.35
+                      or l["start"] < group[-1]["end"] - 0.01 or l.get("zoom") != group[-1].get("zoom")):
             groups.append(group)
-        for gi, g in enumerate(groups):
-            if progress:
-                progress(gi, len(groups), f"清理口误声音 {gi + 1}/{len(groups)}")
-            v0 = max(0.0, g[0]["start"] - 0.08)
-            v1 = g[-1]["end"] + 0.12
-            keep_iv: list[tuple[float, float]] = []
-            for l in g:
-                keep_iv += pieces_by_line[id(l)]
-            if keep_iv:
-                # 片段之间的间隔（config render.segment_gap）：上一段说完最后一个字留 0.05 秒、下一段开口前留 0.05 秒；
-                # 成片第一段开口前也只留 0.02 秒，开头第一幕直接说话。开口、说完的位置按声音判断（识别给的时间常差 0.2–0.7 秒）
-                gap = cfg["render"].get("segment_gap") or {}
-                lead = float(gap.get("first_lead", 0.02)) if gi == 0 else float(gap.get("lead", 0.05))
-                tail = float(gap.get("final_tail", 0.2) if gi == len(groups) - 1 else gap.get("tail", 0.05))
-                v0, v1 = tighten(material / g[0]["clip"], keep_iv[0][0], keep_iv[-1][1], lead, tail)
-                word_spans = [span for l in g for span in words_by_line[id(l)]]
-                if word_spans:
-                    v0 = min(v0, min(a for a, _ in word_spans))
-                    v1 = max(v1, max(b for _, b in word_spans))
-            if not keep_iv:
-                continue
-            deleted = [span for l in g for span in deleted_ranges(l, line_words(script["batch"], l))]
-            clip = material / g[0]["clip"]
-            audio = clean_audio(script["batch"], clip, v0, v1 - v0, keep_iv)
-            # 字幕先按原时间排，再随音画裁剪；不会把每一小段都重新铺一遍整句字幕。
-            subtitles = [sub for l in g for sub in timed_chunks(l["subtitle"], l["start"], l["end"], max_chars)]
-            for a, b in subtract_ranges(v0, v1, deleted):
-                subs = [(round(max(a, x) - a, 3), round(min(b, y) - a, 3), text)
-                        for x, y, text in subtitles if min(b, y) > max(a, x)]
-                segs.append(Segment(clip=clip, v_start=a, v_dur=round(b - a, 3), audio_wav=audio,
-                                    a_start=round(a - v0, 3), subs=subs, zoom=g[0].get("zoom"),
-                                    speech_spans=boundary_word_spans(word_spans, a, b)))
-    else:
-        # 画面也一起剪（跳剪）：每句只用真正要的时间段
-        flat: list[tuple[dict, float, float]] = []          # (句子, 素材起点, 素材终点)
-        for l, pieces in line_pieces:
-            for a, b in pieces:
-                flat.append((l, a, b))
-        if flat:                                            # 开头第一幕直接从第一个字开口的地方开始
-            l, a, b = flat[0]
-            flat[0] = (l, max(a, min(opening_start(material / l["clip"], a), b - 0.1)), b)
-        # 同一素材里首尾相接的片段合并成一段，减少切点
-        runs: list[list] = []
-        for l, a, b in flat:
-            if runs and runs[-1][0]["clip"] == l["clip"] and runs[-1][0].get("zoom") == l.get("zoom") and abs(a - runs[-1][2]) < 0.03:
-                runs[-1][2] = b
-                runs[-1][3].append((l, a, b))
-            else:
-                runs.append([l, a, b, [(l, a, b)]])
-        # 字幕：每句的字幕铺在这句所有片段的总时长上，再按片段切开
-        out_t, line_span, seg_starts = 0.0, {}, []
-        for l0, a, b, parts in runs:
-            seg_starts.append(out_t)
-            for l, pa, pb in parts:
-                s0, s1 = line_span.get(id(l), (out_t, out_t))
-                line_span[id(l)] = (s0 if id(l) in line_span else out_t, out_t + (pb - pa))
-                out_t += pb - pa
-        subs_global = []
-        for l in script["lines"]:
-            if id(l) in line_span:
-                t0, t1 = line_span[id(l)]
-                subs_global += timed_chunks(l["subtitle"], t0, t1, max_chars)
-        prev = None
-        for (l0, a, b, parts), st in zip(runs, seg_starts):
-            seg = Segment(clip=material / l0["clip"], v_start=a, v_dur=b - a, zoom=l0.get("zoom"))
-            seg.speech_spans = boundary_word_spans([span for l, _, _ in parts for span in words_by_line[id(l)]], a, b)
-            for x0, x1, text in subs_global:
-                c0, c1 = max(x0, st), min(x1, st + seg.v_dur)
-                if c1 - c0 > 0.05:
-                    seg.subs.append((c0 - st, c1 - st, text))
-            # 同一机位中间剪掉了一截（跳剪）：下一段稍微放大，看起来是有意的切换
-            if prev is not None and prev.clip == seg.clip and seg.v_start > prev.v_start + prev.v_dur + 0.02:
-                seg.punch = not prev.punch
-            segs.append(seg)
-            prev = seg
+            group = []
+        group.append(l)
+    if group:
+        groups.append(group)
+    for gi, g in enumerate(groups):
+        if progress:
+            progress(gi, len(groups), f"同步裁剪口误 {gi + 1}/{len(groups)}")
+        keep_iv = [span for l in g for span in pieces_by_line[id(l)]]
+        if not keep_iv:
+            continue
+        gap = cfg["render"].get("segment_gap") or {}
+        lead = float(gap.get("first_lead", 0.02)) if gi == 0 else float(gap.get("lead", 0.05))
+        tail = float(gap.get("final_tail", 0.2) if gi == len(groups) - 1 else gap.get("tail", 0.05))
+        clip = material / g[0]["clip"]
+        v0, v1 = tighten(clip, keep_iv[0][0], keep_iv[-1][1], lead, tail)
+        word_spans = [span for l in g for span in words_by_line[id(l)]]
+        if word_spans:
+            v0 = min(v0, min(a for a, _ in word_spans))
+            v1 = max(v1, max(b for _, b in word_spans))
+        deleted = [span for l in g for span in deleted_ranges(l, line_words(script["batch"], l))]
+        # 字幕沿用原时间，只随实际音画切点移动，不在短片段里重铺整句。
+        subtitles = [sub for l in g for sub in timed_chunks(l["subtitle"], l["start"], l["end"], max_chars)]
+        for a, b in subtract_ranges(v0, v1, deleted):
+            subs = [(round(max(a, x) - a, 3), round(min(b, y) - a, 3), text)
+                    for x, y, text in subtitles if min(b, y) > max(a, x)]
+            segs.append(Segment(clip=clip, v_start=a, v_dur=round(b - a, 3), subs=subs,
+                                zoom=g[0].get("zoom"), speech_spans=boundary_word_spans(word_spans, a, b),
+                                source_lines=[source_by_line[id(l)] for l in g]))
     segs = apply_speech_timing(segs, progress)
     if not segs:
         raise ValueError("所选片段没有检测到有效人声，请检查素材、识别时间或重新生成脚本")
-    # 按最终镜头时长过滤；整段删除时音轨和相对字幕一起移除，后续合成重新累计时间。
-    segs = [s for s in segs if s.v_dur >= 0.7]
+    # 短镜头仅按实际原话与前后镜头首尾衔接处的重复字过滤；音画和字幕同步删除。
+    segs, report = short_segments.filter_segments(segs, progress)
+    if short_report is not None:
+        short_report.update(report)
     if not segs:
-        raise ValueError("裁剪后的片段均不足 0.7 秒，已停止出片；请调整所选片段")
+        raise ValueError("裁剪后的片段均不足 0.7 秒且均被短段规则过滤，已停止出片；请调整所选片段")
     rcfg = cfg["render"]
     for s in segs:
         if s.zoom is None:
             s.face = has_face(s.clip, s.v_start + s.v_dur / 2)
             s.zoom = rcfg["talk_zoom"] if s.face else rcfg["product_zoom"]
-        if s.punch:
-            s.zoom = round(s.zoom * float(rcfg.get("jump_cut_punch", 1.08)), 3)
     return segs
 
 
 def apply_speech_timing(segs: list[Segment], progress=None) -> list[Segment]:
-    """处理最终人声音轨后，再同步裁画面、音轨和字幕；原声清理后经过这里。"""
+    """从未经消音的原声检测停顿，再同步裁画面、声音和字幕。"""
     from . import speech_timing
 
     cfg = config.load()["render"]
@@ -440,7 +395,10 @@ def apply_speech_timing(segs: list[Segment], progress=None) -> list[Segment]:
         voices = speech_timing.detect(audio, AUDIO_SR)
         if voices:
             # 先有实际人声证据，再用已选字保护较轻的声母、尾音；纯无声段不能靠识别文字复活。
-            voiced.append((seg, voices + seg.speech_spans))
+            protected = [(a, b) for a, b in seg.speech_spans
+                         if b - a <= MAX_PROTECTED_WORD + 1e-9
+                         and any(x <= b + lead and y >= a - tail for x, y in voices)]
+            voiced.append((seg, voices + protected))
     result = []
     for index, (seg, voices) in enumerate(voiced):
         ranges = speech_timing.retained_ranges(voices, seg.v_dur, threshold=threshold, lead=lead, tail=tail,
@@ -461,7 +419,7 @@ def apply_speech_timing(segs: list[Segment], progress=None) -> list[Segment]:
     return result
 
 
-# ---------------- 只删声音：口误处换成环境底噪 ----------------
+# ---------------- 原声边界检测 ----------------
 
 AUDIO_SR = 48000
 
@@ -551,65 +509,6 @@ def tighten(clip: Path, p0: float, p1: float, lead: float, tail: float) -> tuple
     if b - a < 0.3:                        # 量出来不合理（太短）就不收
         return p0, p1
     return round(a, 3), round(b, 3)
-
-
-def opening_start(clip: Path, first_piece: float) -> float:
-    """成片第一段从哪里开始：直接从第一个字开口的地方开场（往前只留 0.02 秒，不切掉声母），
-    跳过句首被删掉的“来开始”和开口前的空白。"""
-    onset = speech_onset(clip, first_piece)
-    return round(max(first_piece, onset - 0.02), 3) if onset is not None else first_piece
-
-
-def room_tone(batch: str, clip: Path, seconds: float) -> np.ndarray:
-    """这条素材的环境底噪：取最安静的那些片段的频谱，生成同样“听感”的平稳噪声（任意长度、不会有循环感）。"""
-    import librosa
-
-    cache = config.data_root() / "renders" / batch / "_audio" / f"roomtone_{clip.stem}.npy"
-    if cache.exists():
-        mag = np.load(cache)
-    else:
-        y = _clip_audio(clip).mean(axis=1)
-        S = np.abs(librosa.stft(y, n_fft=2048, hop_length=512))
-        e = S.mean(axis=0)
-        quiet = e <= np.percentile(e, 8)                    # 最安静的 8% 帧（停顿里的店内环境声）
-        mag = S[:, quiet].mean(axis=1) if quiet.any() else S.mean(axis=1) * 0.05
-        cache.parent.mkdir(parents=True, exist_ok=True)
-        np.save(cache, mag)
-    n = int(seconds * AUDIO_SR) + 4096
-    frames = n // 512 + 2
-    rng = np.random.default_rng(int(abs(hash(clip.name))) % (2 ** 32))
-    phase = np.exp(2j * np.pi * rng.random((len(mag), frames)))
-    tone = librosa.istft(mag[:, None] * phase, hop_length=512, length=n)
-    return np.stack([tone, tone], axis=1).astype(np.float32)
-
-
-def clean_audio(batch: str, clip: Path, v0: float, dur: float, keep_iv: list[tuple[float, float]]) -> Path:
-    """这一段画面的声音：keep_iv（素材里的秒数）里用主播原声，其余（口误、犹豫声、换气、拖音）换成环境底噪。"""
-    import hashlib
-
-    import soundfile as sf
-
-    key = hashlib.md5(f"bounded-v3|{clip.name}|{v0:.3f}|{dur:.3f}|{keep_iv}".encode()).hexdigest()[:12]
-    out = config.data_root() / "renders" / batch / "_audio" / f"{clip.stem}_{v0:.2f}_{key}.wav"
-    if out.exists():
-        return out
-    y = _clip_audio(clip, v0, dur + 0.5)
-    n = len(y)
-    mask = np.zeros(n, dtype=np.float32)
-    for a, b in keep_iv:
-        i0, i1 = max(0, int((a - v0) * AUDIO_SR)), min(n, int((b - v0) * AUDIO_SR))
-        if i1 > i0:
-            mask[i0:i1] = 1.0
-    ramp = int(0.015 * AUDIO_SR)                            # 15 毫秒交叉淡化，换底噪的地方听不出接缝
-    if ramp > 1:
-        k = np.hanning(2 * ramp + 1).astype(np.float32)
-        # 淡化只发生在保留范围里面；向外卷积会把已删除的字头/尾重新混回来。
-        mask *= np.clip(2 * np.convolve(mask, k / k.sum(), mode="same") - 1, 0.0, 1.0)
-    tone = room_tone(batch, clip, n / AUDIO_SR)[:n]
-    mixed = y * mask[:, None] + tone * (1.0 - mask[:, None])
-    out.parent.mkdir(parents=True, exist_ok=True)
-    sf.write(str(out), mixed, AUDIO_SR)
-    return out
 
 
 # ---------------- 编码 ----------------
@@ -759,13 +658,21 @@ def render(script: dict, progress=None, on_stage=None, *, settings: dict | None 
 
     if on_stage:
         on_stage("look")
-    segs = plan(script, progress)
+    short_report = {}
+    try:
+        segs = plan(script, progress, short_report=short_report)
+    finally:
+        if short_report:
+            (work / "short_segment_review.json").write_text(
+                json.dumps(short_report, ensure_ascii=False, indent=2), encoding="utf-8")
     (work / "edit_timeline.json").write_text(json.dumps({
         "version": 1, "script": script["id"],
         "segments": [{"clip": str(s.clip), "start": s.v_start, "duration": s.v_dur,
                       "video_content_duration": s.v_content_dur, "audio": str(s.audio_wav) if s.audio_wav else None,
                       "audio_start": s.a_start, "audio_duration": s.a_dur, "speech_spans": s.speech_spans,
-                      "subtitles": s.subs} for s in segs],
+                      "subtitles": s.subs, "spoken_text": short_segments.describe(s, i)["text"],
+                      "source_line_ids": [line["id"] for line in short_segments.describe(s, i)["source_lines"]]}
+                     for i, s in enumerate(segs)],
     }, ensure_ascii=False, indent=2), encoding="utf-8")
     out_dir = config.output_root() / script["batch"]
     out_dir.mkdir(parents=True, exist_ok=True)

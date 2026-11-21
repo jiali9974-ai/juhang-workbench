@@ -50,9 +50,10 @@ script:
   keep_as_is: ["bes", "band叔", "pencil"]
 
 render:
-  slip_trim: "audio"                      # audio = 清理原声后同步剪掉口误画面；cut = 按保留字逐段跳剪
+  # 口误与长停顿统一同步裁剪音画，保留区间直接使用原声，不消音或替换环境底噪
   segment_gap: {first_lead: 0.02, lead: 0.05, tail: 0.05, final_tail: 0.2}   # 片头留 0.02 秒，普通切点前后各留 0.05 秒，片尾留 0.2 秒
   silence_cut: {threshold: 0.35}           # 超过 0.35 秒无人声时同步裁掉音画，切点前后各留 0.05 秒；明确删掉的口误不受阈值限制
+  short_segment_filter: {enabled: true}   # 不足 0.7 秒仅比较前段尾→本段首、本段尾→后段首；有连续重复字就删，无重复保留
   width: 1440
   height: 2560
   fps: 60

@@ -20,19 +20,15 @@ class OriginalAudioTests(unittest.TestCase):
         for trim in ("audio", "cut"):
             with self.subTest(trim=trim):
                 cfg["render"]["slip_trim"] = trim
-                cleaned = Path("cleaned-original.wav")
                 with patch.object(config, "load", return_value=cfg), \
                      patch.object(script, "fill_keep", return_value=False), \
                      patch.object(render, "line_words", return_value=None), \
                      patch.object(render, "tighten", return_value=(1, 3)), \
-                     patch.object(render, "opening_start", return_value=1), \
-                     patch.object(render, "clean_audio", return_value=cleaned) as clean, \
                      patch.object(render, "apply_speech_timing", side_effect=lambda segs, progress: segs):
                     segments = render.plan(copy.deepcopy(old_script))
                 self.assertEqual(len(segments), 1)
                 self.assertEqual(segments[0].clip.name, "source.mov")
-                self.assertEqual(segments[0].audio_wav, cleaned if trim == "audio" else None)
-                self.assertEqual(clean.call_count, int(trim == "audio"))
+                self.assertIsNone(segments[0].audio_wav)
                 self.assertIn("这是原声", [text for _, _, text in segments[0].subs])
 
     def test_saving_from_old_browser_removes_retired_settings(self):

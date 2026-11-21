@@ -43,35 +43,34 @@ class SpeechTimingTests(unittest.TestCase):
         line = {"clip": "source.mov", "start": 0, "end": 2.7, "src_text": "这只嗯表", "keep": "这只表",
                 "subtitle": "这只表", "zoom": 1,
                 "words": [["这", 0, .6], ["只", .6, 1.2], ["嗯", 1.2, 1.5], ["表", 1.5, 2.7]]}
-        cleaned = self.root / "cleaned.wav"
         with patch.object(render, "tighten", return_value=(0, 2.7)), \
-             patch.object(render, "clean_audio", return_value=cleaned), \
              patch.object(render, "apply_speech_timing", side_effect=lambda segs, progress: segs):
             first, last = render.plan({"batch": "test", "lines": [line]})
         self.assertEqual((first.v_start, first.v_dur, first.a_start), (0, 1.2, 0))
-        self.assertEqual((last.v_start, last.v_dur, last.a_start), (1.5, 1.2, 1.5))
-        self.assertEqual(first.audio_wav, cleaned)
-        self.assertEqual(last.audio_wav, cleaned)
+        self.assertEqual((last.v_start, last.v_dur, last.a_start), (1.5, 1.2, 0))
+        self.assertIsNone(first.audio_wav)
+        self.assertIsNone(last.audio_wav)
+        self.assertEqual([first.zoom, last.zoom], [1, 1])
         self.assertEqual(first.subs, [(0, 1.2, "这只表")])
         self.assertEqual(last.subs, [(0, 1.2, "这只表")])
 
-    def test_plan_drops_the_protected_point_four_five_second_fragment_after_silence_cut(self):
+    def test_plan_drops_short_prefix_with_repeated_word_from_raw_audio(self):
         self.cfg["render"]["silence_cut"]["threshold"] = .35
         line = {"clip": "source.mov", "start": 3.56, "end": 7.31, "src_text": "来我店里", "keep": "我店里",
                 "subtitle": "我店里", "zoom": 1,
                 "words": [["来", 3.56, 4.31], ["我", 4.31, 5.15], ["店", 5.15, 5.45], ["里", 5.45, 7.31]]}
-        cleaned = self.root / "cleaned.wav"
         with patch.object(render, "tighten", return_value=(4.31, 7.31)), \
-             patch.object(render, "clean_audio", return_value=cleaned), \
-             patch.object(render, "_clip_audio", return_value=np.ones((144000, 2), np.float32)), \
-             patch.object(speech_timing, "detect", return_value=[(.78, 3)]):
+             patch.object(render, "_clip_audio", return_value=np.ones((144000, 2), np.float32)) as audio, \
+             patch.object(speech_timing, "detect", return_value=[(0, .3), (.78, 3)]):
             actual, = render.plan({"batch": "test", "lines": [line]})
+        audio.assert_called_once_with(config.material_root() / "test" / "source.mov", 4.31, 3)
         self.assertEqual((actual.v_start, actual.a_start, actual.v_dur), (5.04, .73, 2.47))
         self.assertEqual((actual.a_dur, actual.v_content_dur), (2.27, 2.27))
-        self.assertEqual(actual.audio_wav, cleaned)
+        self.assertIsNone(actual.audio_wav)
         self.assertEqual(actual.subs, [(0, 2.27, "我店里")])
 
     def test_plan_filters_final_shots_at_point_seven_seconds_and_retimes_captions(self):
+        self.cfg["render"]["short_segment_filter"] = {"enabled": False}
         line = {"clip": "source.mov", "start": 0, "end": 4, "src_text": "原话", "keep": "原话",
                 "subtitle": "原话", "zoom": 1}
         candidates = [render.Segment(self.root / "source.mov", index * 10, duration, zoom=1,
@@ -84,8 +83,6 @@ class SpeechTimingTests(unittest.TestCase):
                 self.cfg["render"]["slip_trim"] = trim
                 with patch.object(render, "line_words", return_value=None), \
                      patch.object(render, "tighten", return_value=(0, 4)), \
-                     patch.object(render, "opening_start", return_value=0), \
-                     patch.object(render, "clean_audio", return_value=self.root / "voice.wav"), \
                      patch.object(render, "apply_speech_timing", return_value=candidates):
                     kept = render.plan({"batch": "test", "lines": [line]})
                 self.assertEqual(kept, [candidates[1], candidates[3]])
@@ -98,6 +95,7 @@ class SpeechTimingTests(unittest.TestCase):
                 self.assertIn("Dialogue: 2,0:00:00.70,0:00:01.40,", text)
 
     def test_plan_stops_when_all_final_shots_are_short(self):
+        self.cfg["render"]["short_segment_filter"] = {"enabled": False}
         for duration in (.45, .699):
             with self.subTest(duration=duration), \
                  patch.object(render, "apply_speech_timing", return_value=[render.Segment(self.root / "source.mov", 0, duration)]), \
@@ -178,11 +176,55 @@ class SpeechTimingTests(unittest.TestCase):
         self.assertEqual(last.zoom, 1.2)
         self.assertEqual(seg.a_start, 5)  # 原计划不被原地改写。
 
-    def test_final_syllable_is_not_shortened_by_old_dragged_word_rule(self):
-        line = {"start": 1, "end": 2.4, "keep": "好啊"}
-        words = [["好", 1, 1.3], ["啊", 1.3, 2.4]]
-        self.assertAlmostEqual(render.keep_pieces(line, words)[-1][1], 1.82)
-        self.assertAlmostEqual(render.keep_pieces(line, words, final=True)[-1][1], 2.52)
+    def test_long_words_and_punctuation_gaps_wait_for_actual_voice_detection(self):
+        line = {"start": 1, "end": 3.4, "keep": "好啊"}
+        words = [["好", 1, 1.9], ["，", 1.9, 2.5], ["啊", 2.5, 3.4]]
+        self.assertEqual(render.keep_pieces(line, words), [(.92, 3.52)])
+
+    def test_overlong_first_word_cannot_bridge_the_pause_before_the_price_sentence(self):
+        self.cfg["render"]["silence_cut"]["threshold"] = .35
+        seg = render.Segment(self.root / "source.mov", 50.49, 8.22,
+                             speech_spans=render.boundary_word_spans([(0, .839), (8.04, 8.1)], 0, 8.22))
+        with patch.object(render, "_clip_audio", return_value=np.ones((394560, 2), np.float32)), \
+             patch.object(speech_timing, "detect", return_value=[(0, .3), (.75, 8.22)]):
+            first, last = render.apply_speech_timing([seg])
+        self.assertEqual(first.v_dur, .35)
+        self.assertEqual(last.v_start, 51.19)
+        self.assertGreater(last.v_dur, .7)
+
+    def test_word_protection_cannot_restore_a_detached_silent_prefix(self):
+        self.cfg["render"]["silence_cut"]["threshold"] = .35
+        seg = render.Segment(self.root / "source.mov", 0, 3, speech_spans=[(0, .3), (2.3, 2.5)])
+        with patch.object(render, "_clip_audio", return_value=np.ones((144000, 2), np.float32)), \
+             patch.object(speech_timing, "detect", return_value=[(1, 2.5)]):
+            actual, = render.apply_speech_timing([seg])
+        self.assertEqual(actual.v_start, .98)
+
+    def test_continuous_sentences_share_one_shot_without_repeating_padding(self):
+        self.cfg["render"]["slip_trim"] = "cut"  # 旧配置也使用统一的同步剪辑流程。
+        lines = [{"clip": "source.mov", "start": start, "end": start + 2, "src_text": text,
+                  "keep": text, "subtitle": text, "zoom": 1}
+                 for start, text in [(1, "第一句"), (3, "第二句")]]
+        with patch.object(render, "line_words", return_value=None), \
+             patch.object(render, "tighten", return_value=(1, 5)), \
+             patch.object(render, "apply_speech_timing", side_effect=lambda segs, progress: segs):
+            actual, = render.plan({"batch": "test", "lines": lines})
+        self.assertEqual((actual.v_start, actual.v_dur), (1, 4))
+        self.assertEqual(actual.subs, [(0, 2, "第一句"), (2, 4, "第二句")])
+
+    def test_jump_cuts_keep_the_configured_zoom(self):
+        self.cfg["render"].update(slip_trim="cut", jump_cut_punch=1.5)
+        for zoom in (None, 1.3):
+            with self.subTest(zoom=zoom):
+                lines = [{"clip": "source.mov", "start": start, "end": start + 2, "src_text": "原话",
+                          "keep": "原话", "subtitle": "原话", "zoom": zoom} for start in (0, 4)]
+                with patch.object(render, "line_words", return_value=None), \
+                     patch.object(render, "tighten", side_effect=[(0, 2), (4, 6)]), \
+                     patch.object(render, "has_face", return_value=True), \
+                     patch.object(render, "apply_speech_timing", side_effect=lambda segs, progress: segs):
+                    result = render.plan({"batch": "test", "lines": lines})
+                expected = self.cfg["render"]["talk_zoom"] if zoom is None else zoom
+                self.assertEqual([seg.zoom for seg in result], [expected, expected])
 
     def test_previous_sentence_tail_cannot_restore_a_deleted_restart(self):
         previous = {"clip": "a.mov", "start": .3, "end": .9, "keep": "高",
@@ -207,17 +249,51 @@ class SpeechTimingTests(unittest.TestCase):
         self.assertEqual(first[1][-1][1], .6)
         self.assertEqual(last[1][0][0], 1)
 
-    def test_audio_fades_never_leak_deleted_speech_outside_retained_intervals(self):
+    def test_real_cut_removes_wrong_audio_and_picture_without_muting_retained_speech(self):
         sr = render.AUDIO_SR
-        with patch.object(render, "_clip_audio", return_value=np.ones((sr, 2), np.float32)), \
-             patch.object(render, "room_tone", return_value=np.zeros((sr, 2), np.float32)):
-            wav = render.clean_audio("test", self.root / "source.mov", 0, 1, [(.2, .4)])
-        audio, _ = sf.read(wav)
-        self.assertEqual(float(np.max(np.abs(audio[:round(.2 * sr)]))), 0)
-        self.assertEqual(float(np.max(np.abs(audio[round(.4 * sr):]))), 0)
-        self.assertLess(abs(float(audio[round(.2 * sr), 0])), .01)  # 边界从零起淡入，避免硬截产生爆音。
-        self.assertLess(abs(float(audio[round(.4 * sr) - 1, 0])), .01)
-        self.assertGreater(float(np.mean(audio[round(.22 * sr):round(.38 * sr)])), .99)
+        waveform = np.zeros((round(2.7 * sr), 2), np.float32)
+        for a, b, hz in [(0, 1.2, 220), (1.2, 1.5, 440), (1.5, 2.7, 880)]:
+            start, end = round(a * sr), round(b * sr)
+            waveform[start:end] = (.25 * np.sin(2 * np.pi * hz * np.arange(end - start) / sr))[:, None]
+        wav = self.root / "voice.wav"
+        sf.write(wav, waveform, sr)
+        source = self.root / "sources"
+        source.mkdir()
+        video = source / "source.mp4"
+        media.run_ffmpeg(["-f", "lavfi", "-i", "color=c=red:s=90x160:r=60:d=1.2",
+                          "-f", "lavfi", "-i", "color=c=green:s=90x160:r=60:d=0.3",
+                          "-f", "lavfi", "-i", "color=c=blue:s=90x160:r=60:d=1.2", "-i", str(wav),
+                          "-filter_complex", "[0:v][1:v][2:v]concat=n=3:v=1:a=0[v]", "-map", "[v]", "-map", "3:a",
+                          "-c:v", "libx264", "-preset", "ultrafast", "-pix_fmt", "yuv420p", "-c:a", "aac", str(video)])
+        line = {"clip": video.name, "start": 0, "end": 2.7, "src_text": "这只嗯表", "keep": "这只表",
+                "subtitle": "这只表", "zoom": 1,
+                "words": [["这", 0, .6], ["只", .6, 1.2], ["嗯", 1.2, 1.5], ["表", 1.5, 2.7]]}
+        with patch.object(config, "material_root", return_value=self.root), \
+             patch.object(render, "tighten", return_value=(0, 2.7)), \
+             patch.object(speech_timing, "detect", return_value=[(0, 1.2)]):
+            first, last = render.plan({"batch": "sources", "lines": [line]})
+        self.assertEqual((first.v_start, first.v_dur), (0, 1.2))
+        self.assertEqual((last.v_start, last.v_dur, last.v_content_dur), (1.5, 1.4, 1.2))
+        self.assertIsNone(last.audio_wav)
+        output = self.root / "last-cut.mp4"
+        render.encode_segment(last, output, look.normalize({"enabled": False}))
+        audio = render._clip_audio(output).mean(axis=1)
+        section = audio[round(.2 * sr):round(.8 * sr)]
+        frequencies = np.fft.rfftfreq(len(section), 1 / sr)
+        self.assertAlmostEqual(frequencies[np.argmax(np.abs(np.fft.rfft(section)))], 880, delta=5)
+        windows = audio[round(.2 * sr):round(1.0 * sr)].reshape(8, -1)
+        self.assertTrue(np.all(np.sqrt(np.mean(windows ** 2, axis=1)) > .1))
+        self.assertLess(float(np.sqrt(np.mean(audio[-round(.15 * sr):] ** 2))), .005)
+        import cv2
+        capture = cv2.VideoCapture(str(output))
+        try:
+            capture.set(cv2.CAP_PROP_POS_MSEC, 200)
+            ok, frame = capture.read()
+        finally:
+            capture.release()
+        self.assertTrue(ok)
+        self.assertGreater(float(frame[:, :, 0].mean()), 220)
+        self.assertLess(float(frame[:, :, 2].mean()), 20)
 
     def test_extended_final_padding_does_not_import_the_next_unselected_word(self):
         seg = render.Segment(self.root / "video.mp4", 10, 1)
