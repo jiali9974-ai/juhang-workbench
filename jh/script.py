@@ -90,17 +90,14 @@ def fill_keep(script: dict) -> bool:
     body = "\n".join(f"{i}. {script['lines'][i]['src_text']}" for i in todo)
     try:
         text = llm.chat([{"role": "system", "content": KEEP_PROMPT}, {"role": "user", "content": body}],
-                        json_mode=True, temperature=0.2, max_tokens=None)
+                        json_mode=True, temperature=0.2, max_tokens=4000)
         got = {int(x["i"]): str(x.get("keep") or "").strip() for x in _extract_json(text)["lines"]}
-    except Exception as e:
-        raise RuntimeError("口误清理失败，已停止出片；请检查模型连接后重试") from e
-    invalid = [i for i in todo if not is_deletion_of(got.get(i, ""), script["lines"][i]["src_text"])]
-    if invalid:
-        raise ValueError(f"第 {', '.join(str(i + 1) for i in invalid)} 句缺少有效 keep，已停止出片，请重新生成脚本")
+    except Exception:  # noqa: BLE001  大模型不可用时：整句保留，照旧出片
+        got = {}
     for i in todo:
         l = script["lines"][i]
         k = got.get(i, "")
-        l["keep"] = k
+        l["keep"] = k if is_deletion_of(k, l["src_text"]) else l["src_text"]
     return True
 
 

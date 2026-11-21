@@ -206,7 +206,6 @@ export function GenPage() {
                       </div>
                       </div>
                       <div className="truncate px-3 py-3 text-sm font-medium" title={video.title}>{video.title}</div>
-                      {video.cover_note && <p className="px-3 pb-3 text-xs leading-relaxed text-amber-700" role="note">{video.cover_note}</p>}
                     </article>
                   )
                 })}

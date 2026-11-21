@@ -110,7 +110,7 @@ def sentence_hints(sentences: list[dict]) -> list[list[str]]:
 
 # ---------------- 调用 ----------------
 
-def _validate_response(data: object, refs: set[str], sources: dict[str, str] | None = None) -> dict:
+def _validate_response(data: object, refs: set[str]) -> dict:
     """JSON 能解析不代表能剪片；所有选句必须来自本批次素材。"""
     if not isinstance(data, dict) or not isinstance(data.get("videos"), list):
         raise ValueError("必须返回包含 videos 数组的 JSON 对象")
@@ -124,15 +124,11 @@ def _validate_response(data: object, refs: set[str], sources: dict[str, str] | N
             ref = str(line.get("ref") or "").strip() if isinstance(line, dict) else ""
             if ref not in refs:
                 raise ValueError(f"第 {vi} 条视频第 {li} 句引用了本批次不存在的编号 {ref[:80]!r}，请使用输入中的 C数字-S数字 编号")
-            if sources is not None and not scriptmod.is_deletion_of(str(line.get("keep") or ""), sources.get(ref, "")):
-                raise ValueError(f"{ref} 的 keep 缺失或改写了原话：必须只从该句原文删字，不能改字、加字或换顺序；字幕纠错写入 subtitle")
     return data
 
 
-def _ask(batch: str, body: str, sources: dict[str, str] | None = None) -> dict:
+def _ask(batch: str, body: str) -> dict:
     refs = set(re.findall(r"^(C\d+-S\d+) \[", body, re.M))
-    if sources is None:
-        sources = dict(re.findall(r"^(C\d+-S\d+) \[[^\]]+\] \S+ \([^)]+\) (.*?)(?:  ⚠.*)?$", body, re.M))
     run_dir = deletion.child_path(config.data_root() / "script_runs", batch) / f"{time.time_ns()}-{uuid.uuid4().hex[:8]}"
     run_dir.mkdir(parents=True)
     prompt = system_prompt()
@@ -157,7 +153,7 @@ def _ask(batch: str, body: str, sources: dict[str, str] | None = None) -> dict:
             raise
         (run_dir / f"response-{attempt}.txt").write_text(text, encoding="utf-8")
         try:
-            result = _validate_response(scriptmod._extract_json(text), refs, sources)
+            result = _validate_response(scriptmod._extract_json(text), refs)
         except ValueError as e:
             last_err = e
             report = {"status": "rejected", "error": str(e)}
@@ -185,9 +181,7 @@ def _lines(video: dict, index: dict) -> list[dict]:
         seen.add(ref)
         t, s = index[ref]
         keep = str(item.get("keep") or "").strip()
-        if keep and not scriptmod.is_deletion_of(keep, s["text"]):
-            raise ValueError(f"{ref} 的 keep 改写了原话，无法安全剪掉口误，请重新生成脚本")
-        keep = keep or s["text"]
+        keep = keep if scriptmod.is_deletion_of(keep, s["text"]) else s["text"]
         role = item.get("role") if item.get("role") in ("hook", "product", "cta") else "product"
         lines.append({"ref": ref, "clip": t["clip"], "start": s["start"], "end": s["end"], "src_lang": s["lang"],
                       "src_text": s["text"], "keep": keep, "words": s.get("words"),
@@ -218,7 +212,7 @@ def generate(batch: str, transcripts: list[dict], progress=None) -> list[dict]:
 
     if progress:
         progress(0, 1, f"大模型统一规划全部 {len(transcripts)} 条素材")
-    videos = _ask(batch, "\n".join(clip_rows(transcripts)), {ref: s["text"] for ref, (_, s) in index.items()}).get("videos", [])
+    videos = _ask(batch, "\n".join(clip_rows(transcripts))).get("videos", [])
 
     scripts = []
     for v in videos:

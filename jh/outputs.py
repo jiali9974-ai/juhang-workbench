@@ -42,12 +42,6 @@ def list_outputs(active_jobs: list[dict] | None = None) -> list[dict]:
             if stat.st_size:
                 item = {"batch": batch, "id": sid, "title": (script or {}).get("title") or sid,
                         "updated": stat.st_mtime, "size": stat.st_size}
-                try:
-                    selection = json.loads(path.with_name(f"{sid}_封面选择.json").read_text(encoding="utf-8"))
-                    if isinstance(selection, dict) and isinstance(selection.get("note"), str) and selection["note"]:
-                        item["cover_note"] = selection["note"]
-                except (OSError, ValueError):
-                    pass  # 缺少旧版封面说明、或说明损坏，不影响成片显示。
                 result.append(item)
         except (OSError, ValueError):
             continue

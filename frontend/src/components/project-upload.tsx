@@ -39,7 +39,7 @@ export function ProjectUpload({ onCreated, onUploaded }: {
   }
 
   return (
-    <div>
+    <div className="flex max-h-[min(42svh,20rem)] min-h-0 flex-col">
       <div role="button" tabIndex={0} aria-label="上传素材创建项目"
         onClick={() => fileRef.current?.click()}
         onKeyDown={(event) => {
@@ -56,13 +56,13 @@ export function ProjectUpload({ onCreated, onUploaded }: {
           filesFromDrop(event.dataTransfer).then((groups) => Promise.all(groups.map(({ files, folder }) => addFiles(files, folder))))
             .catch((error) => toast.error("读取素材失败", { description: message(error) }))
         }}
-        className={cn("flex min-h-48 cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed bg-muted/20 px-5 py-8 text-center transition-colors outline-none hover:border-foreground/30 hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-ring", over && "border-foreground bg-muted/60")}>
+        className={cn("flex shrink-0 cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed bg-muted/20 px-5 py-4 text-center transition-colors outline-none hover:border-foreground/30 hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-ring", over && "border-foreground bg-muted/60")}>
         <div className="flex items-center gap-2 text-base font-semibold">
           {creating > 0 && <Loader2 className="size-4 animate-spin" />}
           {over ? "松开创建新素材项目" : creating ? "正在创建项目，可继续添加" : "拖入素材，创建项目"}
         </div>
         <p className="mt-2 text-xs text-muted-foreground">每个文件夹独立一个项目，再次上传会创建新项目</p>
-        <div className="mt-5 flex flex-wrap justify-center gap-2" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()}>
+        <div className="mt-3 flex flex-wrap justify-center gap-2" onClick={(event) => event.stopPropagation()} onKeyDown={(event) => event.stopPropagation()}>
           <Button variant="outline" className="rounded-full bg-background" onClick={() => fileRef.current?.click()}><FileVideo />选择视频</Button>
           <Button variant="outline" className="rounded-full bg-background" onClick={() => folderRef.current?.click()}><FolderUp />选择文件夹</Button>
         </div>
@@ -75,7 +75,7 @@ export function ProjectUpload({ onCreated, onUploaded }: {
         element?.setAttribute("directory", "")
       }} type="file" multiple className="hidden"
         onChange={(event) => { const files = Array.from(event.target.files ?? []); event.target.value = ""; if (files.length) addFiles(files, folderOf(files)) }} />
-      <UploadGroups items={queue.items} maxVisibleItems={3} />
+      <UploadGroups items={queue.items} className="mt-3" />
     </div>
   )
 }

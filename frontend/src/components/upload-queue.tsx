@@ -74,13 +74,14 @@ export function DropZone({ onFiles, big, batch }: { onFiles: (f: FileList) => vo
   )
 }
 
-export function UploadList({ items, onCancel, onClear, onRetry, onRetryFailed, maxVisibleItems }: {
+export function UploadList({ items, onCancel, onClear, onRetry, onRetryFailed, maxVisibleItems, scrollable = true }: {
   items: UploadItem[]
   onCancel: (k: string) => void
   onClear?: () => void
   onRetry: (key: string) => void
   onRetryFailed: () => void
   maxVisibleItems?: number
+  scrollable?: boolean
 }) {
   if (!items.length) return null
   const done = items.filter((x) => x.status === "done").length
@@ -98,8 +99,9 @@ export function UploadList({ items, onCancel, onClear, onRetry, onRetryFailed, m
           {done + cancelled > 0 && onClear && <button className="text-gold-ink hover:underline" onClick={onClear}>清除已结束</button>}
         </span>
       </div>
-      <div className="scrollbar-thin max-h-64 overflow-y-auto"
-        style={maxVisibleItems ? { maxHeight: `${maxVisibleItems * 3}rem` } : undefined}>
+      <div role={scrollable ? "region" : undefined} aria-label={scrollable ? "上传文件列表" : undefined}
+        tabIndex={scrollable ? 0 : undefined} className={cn(scrollable && "scroll-region max-h-64")}
+        style={scrollable && maxVisibleItems ? { maxHeight: `${maxVisibleItems * 3}rem` } : undefined}>
         <AnimatePresence initial={false}>
           {items.map((it) => {
             const pct = it.file.size ? (it.loaded / it.file.size) * 100 : 0

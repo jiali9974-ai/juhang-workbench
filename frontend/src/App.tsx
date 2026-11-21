@@ -39,7 +39,7 @@ export default function App() {
             </AnimatePresence>
           </main>
           <AnimatePresence>{route.page !== "home" && <AppDock key="dock" route={route} />}</AnimatePresence>
-          <JobsDock hideCompleted={route.page === "gen"} />
+          <JobsDock hideCompleted={route.page === "gen"} hasNavigation={route.page !== "home"} />
           <Toaster theme="light" position="top-right" richColors closeButton />
         </JobsProvider>
       </TooltipProvider>

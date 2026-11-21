@@ -126,7 +126,7 @@ const e = encodeURIComponent
 /** 美颜调色强度：都是 0–1 */
 export interface LookSettings {
   enabled: boolean
-  /** 统一光线：不同素材先按老板肤色拉齐亮度和白平衡，再调色 */
+  /** 按片段校正曝光与白平衡，保留不同人物肤色和产品原色 */
   normalize: boolean
   smooth: number
   tone: number
@@ -174,7 +174,6 @@ export interface OutputVideo {
   title: string
   updated: number
   size: number
-  cover_note?: string
 }
 
 const legacyOutputVersions = new Map<string, number>()

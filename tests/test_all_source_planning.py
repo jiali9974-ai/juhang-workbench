@@ -24,7 +24,7 @@ class AllSourcePlanningTests(unittest.TestCase):
     def test_all_75_sources_exceeding_20_minutes_enter_one_plan_and_can_be_used(self):
         transcripts = self.transcripts()
         response = {"videos": [{"title": "全部配件信息", "lines": [
-            {"ref": f"C{index}-S1", "keep": item["sentences"][0]["text"], "subtitle": item["sentences"][0]["text"], "role": "product"}
+            {"ref": f"C{index}-S1", "subtitle": item["sentences"][0]["text"], "role": "product"}
             for index, item in enumerate(transcripts, 1)
         ]}]}
         with patch.object(script_agent.llm, "chat", return_value=json.dumps(response)) as chat:

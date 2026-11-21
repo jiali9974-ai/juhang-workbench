@@ -10,6 +10,8 @@ from . import config
 _landmarker = None
 _lock = threading.Lock()
 MODEL = "face_landmarker.task"
+SCORE_WEIGHTS = {"camera": 60., "smile": 30., "sharpness": 10.}
+MOUTH_PROBLEM = "张嘴说话或嘴型夸张"
 
 
 def metrics(img: np.ndarray) -> dict | None:
@@ -96,24 +98,29 @@ def metrics(img: np.ndarray) -> dict | None:
     }
 
 
+def _raised_corners(m: dict) -> bool:
+    # 嘴角必须实际微扬；只有张嘴、牙齿亮或单侧表情系数高，不能当成微笑。
+    return (m.get("smile_confidence", 0) >= .20 and m.get("smile", 0) >= .015 and m.get("frown", 1) < .2
+            and m.get("mouth_press", 0) <= .45 and m.get("mouth_pucker", 0) <= .40
+            and abs(m.get("smile_left", 0) - m.get("smile_right", 0)) <= .3)
+
+
 def mouth_natural(m: dict | None) -> bool:
     if not m:
         return False
-    opening, confidence = m.get("mar", 1), m.get("smile_confidence", 0)
-    obvious_grin = confidence > .78 and opening > .10
-    exposed_teeth = m.get("mouth_bright_ratio", 0) > .40 and opening > .07
-    return (opening <= .15 and m.get("mouth_gap_max", opening) <= .18 and m.get("jaw_open", 1) <= .22
-            and not obvious_grin and not exposed_teeth and m.get("mouth_press", 0) <= .6 and m.get("mouth_pucker", 0) <= .5)
+    opening = m.get("mar", 1)
+    # 嘴角微扬时允许自然露齿，不按牙齿亮度或笑容系数排除；仍限制明显张嘴说话或夸张嘴型。
+    smiling_limits = _raised_corners(m)
+    return (opening <= (.22 if smiling_limits else .15)
+            and m.get("mouth_gap_max", opening) <= (.25 if smiling_limits else .18)
+            and m.get("jaw_open", 1) <= (.26 if smiling_limits else .22)
+            and m.get("mouth_press", 0) <= .6 and m.get("mouth_pucker", 0) <= .5)
 
 
 def smiling(m: dict | None) -> bool:
     if not m:
         return False
-    # 识别自然、放松的轻微笑意，允许嘴唇自然分开，避免把刻意抿嘴当成微笑。
-    confidence = m.get("smile_confidence", 0)
-    return (mouth_natural(m) and confidence >= .20 and m.get("smile", 0) >= .015 and m.get("frown", 1) < .2
-            and m.get("mouth_press", 0) <= .45 and m.get("mouth_pucker", 0) <= .40
-            and abs(m.get("smile_left", 0) - m.get("smile_right", 0)) <= .3)
+    return mouth_natural(m) and _raised_corners(m)
 
 
 def camera_facing(m: dict) -> bool:
@@ -122,14 +129,16 @@ def camera_facing(m: dict) -> bool:
         x, y = m["iris_horizontal"], m["iris_vertical"]
         # 同时检查两只眼，不能只靠一只眼或平均值掩盖明显偏视。
         centered = all(.30 <= value <= .70 for value in x) and all(.25 <= value <= .75 for value in y)
-        extreme = ((abs(m["gaze_horizontal"]) > .60 and max(abs(value - .5) for value in x) > .10)
-                   or (abs(m["gaze_vertical"]) > .75 and max(abs(value - .5) for value in y) > .15))
-        return centered and not extreme and abs(m["pose_yaw"]) <= 12 and abs(m["pose_pitch"]) <= 16
+        # 眼镜可能让虹膜关键点仍落在眼眶中央；表情系数与位置或低头姿态互相印证时排除偏视。
+        extreme = ((abs(m["gaze_horizontal"]) > .30 and max(abs(value - .5) for value in x) > .10)
+                   or (abs(m["gaze_vertical"]) > .45 and max(abs(value - .5) for value in y) > .08)
+                   or (m.get("pose_pitch", 0) > 12 and m["gaze_vertical"] > .16))
+        return centered and not extreme and abs(m.get("pose_yaw", 90)) <= 12 and abs(m.get("pose_pitch", 90)) <= 16
     # 眼部像素不足时保留较保守的判断，不把无法判断的眼神算作已确认。
-    horizontal = abs(m["gaze_horizontal"])
-    centered = m["iris_offset"] <= .10 and abs(m["pose_yaw"]) <= 8
-    return ((horizontal <= .16 or (horizontal <= .20 and centered)) and abs(m["gaze_vertical"]) <= .18
-            and m["gaze_eye_max"] <= .28 and m["iris_offset"] <= .20)
+    horizontal = abs(m.get("gaze_horizontal", 1))
+    centered = m.get("iris_offset", 1) <= .10 and abs(m.get("pose_yaw", 90)) <= 8
+    return ((horizontal <= .16 or (horizontal <= .20 and centered)) and abs(m.get("gaze_vertical", 1)) <= .18
+            and m.get("gaze_eye_max", 1) <= .28 and m.get("iris_offset", 1) <= .20)
 
 
 def problems(m: dict | None, ref: dict) -> list[str]:
@@ -149,7 +158,7 @@ def problems(m: dict | None, ref: dict) -> list[str]:
     if not camera_facing(m):
         bad.append("眼神没有看向镜头")
     if not mouth_natural(m):
-        bad.append("张嘴说话、露齿大笑或嘴型夸张")
+        bad.append(MOUTH_PROBLEM)
     if m["frown"] > .35:
         bad.append("嘴角表情不自然")
     if m["sharp"] < max(18., .4 * ref["sharp"]):
@@ -157,12 +166,54 @@ def problems(m: dict | None, ref: dict) -> list[str]:
     return bad
 
 
+def score_parts(m: dict, ref: dict) -> dict[str, float]:
+    """统一百分制：看向镜头 60、嘴角微扬 30、清晰度 10。"""
+    camera = 0.
+    if camera_facing(m):
+        if m.get("iris_valid") and len(m.get("iris_horizontal", [])) == len(m.get("iris_vertical", [])) == 2:
+            # 与合格检查一致，优先使用双眼的水平、垂直位置，取偏移更明显的一只眼。
+            offset = max(max(abs(value - .5) / .20 for value in m["iris_horizontal"]),
+                         max(abs(value - .5) / .25 for value in m["iris_vertical"]))
+            # 不把动画系数换算成视线角度，只用它补充偏视证据，避免关键点误差给低头帧高分。
+            animation = max(abs(m.get("gaze_horizontal", 1)) / .60, abs(m.get("gaze_vertical", 1)) / .75,
+                            m.get("gaze_eye_max", 1) / .60)
+            offset = max(offset, max(0., min(1., (animation - .20) / .80)))
+        else:
+            offset = max(abs(m.get("gaze_horizontal", 1)) / .20, abs(m.get("gaze_vertical", 1)) / .18,
+                         m.get("gaze_eye_max", 1) / .28, m.get("iris_offset", 1) / .20)
+        camera = (.75 * max(0., 1 - offset)
+                  + .15 * max(0., 1 - abs(m.get("pose_yaw", 90)) / 12)
+                  + .10 * max(0., 1 - abs(m.get("pose_pitch", 90)) / 16))
+    # 轻微上扬就获得微笑分，不继续奖励更大的笑容，也不惩罚自然露齿。
+    return {"camera": SCORE_WEIGHTS["camera"] * camera,
+            "smile": SCORE_WEIGHTS["smile"] * float(smiling(m)),
+            "sharpness": SCORE_WEIGHTS["sharpness"] * max(0., min(m.get("sharp", 0) / max(ref.get("sharp", 18.), 18.), 1.))}
+
+
 def score(m: dict, ref: dict) -> float:
-    # 笑意明确后不再持续奖励更强的笑容，给自然的轻微笑意、眼神和稳定性留出权重。
-    return (6 * min(m.get("smile_confidence", 0), .35) + .4 * m.get("stable_neighbors", 0)
-            + 1.5 * max(0, 1 - abs(m.get("gaze_horizontal", 1)) / .16)
-            + max(0, 1 - abs(m.get("pose_yaw", 90)) / 12)
-            + .5 * max(0, 1 - abs(m.get("roll", 90)) / 9)
-            + .5 * min(m.get("sharp", 0) / max(ref["sharp"], 1), 1.2)
-            + .5 * max(0, 1 - m.get("jaw_open", 1) / .3)
-            - .5 * m.get("mouth_press", 0) - .3 * m.get("mouth_pucker", 0))
+    return sum(score_parts(m, ref).values())
+
+
+def fallback_parts(m: dict, ref: dict) -> dict[str, float]:
+    """没有理想帧时连续评分，面向镜头最重要，放松自然的嘴型不必带微笑。"""
+    if m.get("scene"):
+        camera, natural = 0., 0.
+    else:
+        yaw = max(0., 1 - abs(m.get("pose_yaw", 90)) / 45)
+        pitch = max(0., 1 - abs(m.get("pose_pitch", 90)) / 35)
+        eye_offset = max(abs(m.get("gaze_horizontal", 1)), abs(m.get("gaze_vertical", 1)))
+        # 水平正脸不能抵消明显低头；两个方向共同决定朝向，避免更清晰的低头帧胜过看镜头的帧。
+        camera = (yaw * pitch) ** .5 * (.70 + .30 * max(0., 1 - eye_offset))
+        eyes = max(0., 1 - max(m.get("blink", 1), m.get("ear_diff", 1)))
+        mouth = max(0., 1 - max(m.get("mar", 1) / .5, m.get("jaw_open", 1) / .6,
+                                m.get("mouth_press", 0), m.get("mouth_pucker", 0)))
+        expression = .8 * max(0., 1 - m.get("frown", 1)) + .2 * float(smiling(m))
+        natural = .30 * eyes + .50 * mouth + .20 * expression
+        # 半闭眼会明显影响自然度；连续扣分，仍保留所有画面参与择优，不产生新的出片门槛。
+        natural *= max(.25, 1 - 2 * max(0., m.get("blink", 1) - .45))
+    return {"camera": 60 * camera, "naturalness": 30 * natural,
+            "sharpness": 10 * max(0., min(m.get("sharp", 0) / max(ref.get("sharp", 18.), 18.), 1.))}
+
+
+def fallback_score(m: dict, ref: dict) -> float:
+    return sum(fallback_parts(m, ref).values())

@@ -128,11 +128,11 @@ export function BeautyEditor({ batch, scripts, source, revision, header }: {
                 <span className="flex items-center gap-2 font-medium"><Sun className="size-4" />统一光线</span>
                 <input type="checkbox" checked={s.normalize} disabled={!s.enabled} onChange={(e) => set({ normalize: e.target.checked })} className="size-4 accent-[var(--foreground)]" />
               </span>
-              <span className="text-[11px] text-muted-foreground">不同天、不同地方拍的素材，先按老板的肤色把亮度和白平衡拉齐，再套美颜调色，成片效果一致。</span>
+              <span className="text-[11px] text-muted-foreground">按每段光线温和校正曝光与白平衡，保留不同人物的肤色；手表特写保留产品原色。</span>
             </label>
             <div className="grid gap-5 px-1">
               <Slider label="磨皮" hint="跟随人脸局部磨皮，保护眼眉和嘴唇。0 关闭，50 是试片的力度。" value={s.smooth} onChange={(v) => set({ smooth: v })} disabled={!s.enabled} />
-              <Slider label="提亮调色" hint="通透提亮、自然红润肤色与干净浅蓝，保留黑白层次。0 = 不额外调色" value={s.tone} onChange={(v) => set({ tone: v })} disabled={!s.enabled} />
+              <Slider label="提亮调色" hint="温和提亮中间调，保留肤色、服饰和产品色相。0 = 不额外调色" value={s.tone} onChange={(v) => set({ tone: v })} disabled={!s.enabled} />
               <Slider label="手表特写锐化" hint="只用在没有人脸的画面，钻石、表盘更清楚。0 = 不锐化" value={s.sharpen} onChange={(v) => set({ sharpen: v })} disabled={!s.enabled} />
             </div>
             <div className="flex flex-wrap items-center gap-2 border-t pt-5">

@@ -657,7 +657,7 @@ def encode_segment(seg: Segment, out: Path, settings: dict | None = None) -> Non
     if effects["normalize"]:
         from . import normalize
 
-        nf = normalize.segment_filter(seg.clip, seg.v_start, seg.v_dur)   # 不同素材光线不同：按这段的肤色拉齐亮度和白平衡
+        nf = normalize.segment_filter(seg.clip, seg.v_start, seg.v_dur)
         if nf:
             filters.append(nf)
     if effects["sharpen"]:
@@ -810,8 +810,11 @@ def render(script: dict, progress=None, on_stage=None, *, settings: dict | None 
                 if image.exists():
                     image.replace(out_dir / image.name)
 
+    from . import grading, normalize
+
     meta = {"script": script["id"], "duration": round(total, 2), "segments": len(segs),
-            "output": str(out)}
+            "output": str(out), "look": settings, "grading_version": grading.VERSION,
+            "normalization_policy": normalize.policy_key()}
     (work / "render.json").write_text(json.dumps(meta, ensure_ascii=False, indent=1), encoding="utf-8")
     return out
 

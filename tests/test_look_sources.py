@@ -99,7 +99,8 @@ class LookSourceTests(unittest.TestCase):
         selected = self.video()
         raw = look_sources.cover_source_path(selected["batch"], selected["id"])
         Image.new("RGB", (180, 320), (50, 50, 50)).save(raw, quality=100)
-        raw.with_suffix(".json").write_text(json.dumps({"normalization": "lutyuv=y='16+2*(val-16)':u=val:v=val"}), encoding="utf-8")
+        raw.with_suffix(".json").write_text(json.dumps({"normalization": "lutyuv=y='16+2*(val-16)':u=val:v=val",
+            "normalization_policy": normalize.policy_key()}), encoding="utf-8")
         settings = {"enabled": True, "normalize": True, "smooth": 0, "tone": 0, "sharpen": 0}
         response = self.preview(selected, settings)
         self.assertEqual(response.status_code, 200, response.text)
@@ -128,7 +129,8 @@ class LookSourceTests(unittest.TestCase):
 
         def save_image(clip, t, zoom, destination):
             Image.new("RGB", (180, 320), "red").save(destination)
-            destination.with_suffix(".json").write_text(json.dumps({"normalization": "eq=brightness=0.03"}), encoding="utf-8")
+            destination.with_suffix(".json").write_text(json.dumps({"normalization": "eq=brightness=0.03",
+                "normalization_policy": normalize.policy_key()}), encoding="utf-8")
 
         with patch.object(look_sources, "save", side_effect=save_image) as save:
             first = look_sources.resolve(selected)
@@ -156,14 +158,14 @@ class LookSourceTests(unittest.TestCase):
         chosen = json.loads(destination.with_name("cover_check.json").read_text(encoding="utf-8"))["chosen"]
         self.assertEqual((chosen["t"], chosen["zoom"]), (3.75, 1.15))
 
-    def test_missing_qualified_face_never_falls_back_to_an_arbitrary_frame(self):
+    def test_unreadable_source_does_not_publish_an_arbitrary_frame(self):
         seg = SimpleNamespace(clip=self.root / "source.MOV", v_start=2.2, v_dur=.8, zoom=1.05)
         destination = self.root / "cover.png"
         source_out = self.root / "raw.jpg"
         with patch.object(cover, "_birefnet", return_value=object()), \
-             patch.object(cover, "candidates", return_value=([], {})), patch.object(cover, "make_cover"), \
+             patch.object(cover, "candidates", return_value=([], {})), patch.object(cover, "_scene_candidates", return_value=[]), \
              patch.object(look_sources, "save") as save:
-            with self.assertRaisesRegex(RuntimeError, "未找到看向镜头"):
+            with self.assertRaisesRegex(RuntimeError, "没有可读取的封面画面"):
                 cover.make_best_cover([seg], [], destination, settings=self.off, source_out=source_out)
         save.assert_not_called()
         record = json.loads(destination.with_name("cover_check.json").read_text(encoding="utf-8"))
@@ -179,6 +181,14 @@ class LookSourceTests(unittest.TestCase):
         saved = np.asarray(Image.open(destination))
         self.assertGreater(float(saved[:, :, 0].mean()), 150)
         self.assertEqual(look_sources._read(destination, "cover").normalization, "eq=brightness=0.03")
+
+    def test_old_saved_fixed_skin_correction_is_recomputed_from_the_original_image(self):
+        image = self.root / "assets" / "beauty-default.jpg"
+        image.with_suffix(".json").write_text(json.dumps({"normalization": "eq=brightness=0.5"}), encoding="utf-8")
+        with patch.object(normalize, "still_filter", return_value="eq=brightness=0.03") as recompute:
+            source = look_sources._read(image, "default")
+        recompute.assert_called_once_with(image)
+        self.assertEqual(source.normalization, "eq=brightness=0.03")
 
 
 if __name__ == "__main__":

@@ -1,19 +1,18 @@
-"""参考风格调色：通透中间调、自然肤色、干净的浅蓝，保留中性灰与黑白端点。"""
+"""自然调色：轻提中间调，保留人物、服饰和手表的原有色相与高光。"""
 from __future__ import annotations
 
 import uuid
 from pathlib import Path
 
-import cv2
 import numpy as np
 
 from . import config
 
-VERSION = "reference-v2"
+VERSION = "natural-v4"
 SIZE = 33
 LUMA = np.array([.2126, .7152, .0722], np.float32)
-CURVE = np.array([(0, 0), (.03, .025), (.12, .16), (.3, .55), (.5, .81),
-                  (.72, .90), (.9, .96), (1, 1)], np.float32)
+CURVE = np.array([(0, 0), (.03, .03), (.12, .15), (.3, .43), (.5, .64),
+                  (.72, .80), (.9, .925), (1, 1)], np.float32)
 
 
 def _restore_luma(rgb: np.ndarray, target: np.ndarray) -> np.ndarray:
@@ -28,25 +27,14 @@ def _restore_luma(rgb: np.ndarray, target: np.ndarray) -> np.ndarray:
 def transform(rgb: np.ndarray, strength: float) -> np.ndarray:
     """生成 LUT 用的 RGB→RGB 映射；逐像素处理，不改变构图或纹理。"""
     rgb = np.asarray(rgb, np.float32)
-    shape = rgb.shape
-    hsv = cv2.cvtColor(rgb.reshape((-1, 1, 3)), cv2.COLOR_RGB2HSV).reshape(shape)
-    hue, saturation = hsv[..., 0].copy(), hsv[..., 1].copy()
-    distance = lambda center: np.abs((hue - center + 180) % 360 - 180)
-    skin = np.exp(-.5 * (distance(24) / 26) ** 2)
-    blue = np.exp(-.5 * (distance(212) / 30) ** 2)
-    chromatic = np.clip((saturation - .02) / .10, 0, 1)
+    strength = float(np.clip(strength, 0, 1))
     luma = rgb @ LUMA
     lift = np.interp(luma, CURVE[:, 0], CURVE[:, 1]) - luma
-    # 蓝色不跟着肤色一起泛白，深色保留层次，高光平滑收束。
-    target = luma + strength * lift * (1 - .32 * blue * chromatic)
-    toned = _restore_luma(rgb, target)
-    hsv = cv2.cvtColor(toned.reshape((-1, 1, 3)), cv2.COLOR_RGB2HSV).reshape(shape)
-    skin_delta = np.clip((8 - hue + 180) % 360 - 180, -10, 10)
-    # 肤色只向轻微红润靠拢，限制色相偏移，避免木饰面、金表被一起推成粉红。
-    shift = min(1., 2 * strength) * skin * skin_delta + strength * 26 * blue
-    hsv[..., 0] = (hsv[..., 0] + chromatic * shift) % 360
-    hsv[..., 1] = np.clip(hsv[..., 1] * (1 + strength * chromatic * (.34 * skin + 1.5 * blue)), 0, 1)
-    colored = cv2.cvtColor(hsv.reshape((-1, 1, 3)), cv2.COLOR_HSV2RGB).reshape(shape)
+    target = luma + strength * lift
+    # 只补偿提亮造成的轻微褪色，不把不同肤色拉成粉红，也不旋转蓝表盘和金表的颜色。
+    chroma = rgb - luma[..., None]
+    compensation = np.minimum(1.10, np.power(np.maximum(target, 1e-6) / np.maximum(luma, 1e-6), .25))
+    colored = luma[..., None] + chroma * compensation[..., None]
     return _restore_luma(colored, target)
 
 
@@ -67,7 +55,13 @@ def lut_file(strength: float) -> Path:
         with temporary.open("w", encoding="ascii", newline="\n") as stream:
             stream.write(f'TITLE "Juhang {VERSION}"\nLUT_3D_SIZE {SIZE}\nDOMAIN_MIN 0 0 0\nDOMAIN_MAX 1 1 1\n')
             np.savetxt(stream, colors, fmt="%.7f")
-        temporary.replace(path)
+        try:
+            temporary.replace(path)
+        except PermissionError:
+            # Windows 上并发预览可能正在读取另一请求刚发布的同版本 LUT。
+            # 文件已原子发布且内容由版本和强度唯一确定，可以复用；其他写入错误仍上抛。
+            if not path.is_file():
+                raise
     finally:
         temporary.unlink(missing_ok=True)
     return path

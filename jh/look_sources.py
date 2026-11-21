@@ -66,17 +66,25 @@ def save(clip: Path, t: float, zoom: float, destination: Path) -> None:
         temporary.unlink(missing_ok=True)
     destination.with_suffix(".json").write_text(json.dumps({
         "clip": clip.name, "t": t, "zoom": zoom, "normalization": correction,
+        "normalization_policy": normalize.policy_key(),
     }, ensure_ascii=False, indent=1), encoding="utf-8")
 
 
 def _read(image: Path, origin: str, fallback: bool = False) -> Source:
+    from . import normalize
+
     normalization = ""
+    policy = None
     try:
         metadata = image.with_suffix(".json")
         if not metadata.is_symlink() and metadata.resolve().parent == image.resolve().parent:
-            normalization = str(json.loads(metadata.read_text(encoding="utf-8")).get("normalization") or "")
+            record = json.loads(metadata.read_text(encoding="utf-8"))
+            normalization = str(record.get("normalization") or "")
+            policy = record.get("normalization_policy")
     except (OSError, ValueError, AttributeError):
         pass
+    if policy != normalize.policy_key():
+        normalization = normalize.still_filter(image)
     return Source(image, normalization, origin, fallback)
 
 

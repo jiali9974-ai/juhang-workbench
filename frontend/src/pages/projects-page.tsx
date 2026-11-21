@@ -9,7 +9,7 @@ import { Button } from "@/components/ui/button"
 import { ProjectUpload } from "@/components/project-upload"
 import { useAllUploads } from "@/components/upload-queue"
 import { useSessionState } from "@/hooks/use-session-state"
-import { PAGE_CONTAINER, PAGE_TITLE } from "@/lib/layout"
+import { PAGE_TITLE } from "@/lib/layout"
 import { useJobs } from "@/hooks/use-jobs"
 import { followTask, getRoute, go } from "@/hooks/use-route"
 import { api, urls, type Batch } from "@/lib/api"
@@ -97,7 +97,7 @@ export function ProjectsPage() {
   if (!list) return <div className="grid min-h-svh place-items-center"><Loader2 className="size-6 animate-spin text-muted-foreground" /></div>
 
   const header = (
-    <div className="mb-8">
+    <div className="mb-5">
       <h1 className={PAGE_TITLE}>素材</h1>
     </div>
   )
@@ -138,7 +138,7 @@ export function ProjectsPage() {
   })
 
   return (
-    <div className={PAGE_CONTAINER}>
+    <div className="mx-auto flex h-svh min-h-[38rem] w-full max-w-6xl flex-col px-6 pt-6 pb-28 md:pt-10">
       <FeaturePanel
         header={header}
         items={items}

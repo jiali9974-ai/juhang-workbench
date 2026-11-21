@@ -11,7 +11,7 @@ import { CancelTaskButton } from "@/components/cancel-task-button"
 
 const STATE = { queued: "排队", running: "", done: "完成", error: "出错", cancelled: "已取消" } as const
 
-export function JobsDock({ hideCompleted = false }: { hideCompleted?: boolean }) {
+export function JobsDock({ hideCompleted = false, hasNavigation = true }: { hideCompleted?: boolean; hasNavigation?: boolean }) {
   const { jobs, active } = useTaskList()
   const [open, setOpen] = useState(false)
   const busy = active.length > 0
@@ -25,7 +25,7 @@ export function JobsDock({ hideCompleted = false }: { hideCompleted?: boolean })
           animate={{ opacity: 1, y: 0, scale: 1 }}
           exit={{ opacity: 0, y: 24 }}
           transition={{ type: "spring", stiffness: 320, damping: 30 }}
-          className="fixed right-5 bottom-5 z-40 max-lg:bottom-24 w-[340px] overflow-hidden rounded-2xl border bg-popover/95 lift-shadow backdrop-blur"
+          className={cn("fixed right-5 bottom-5 z-40 w-[340px] max-w-[calc(100vw-2.5rem)] overflow-hidden rounded-2xl border bg-popover/95 lift-shadow backdrop-blur", hasNavigation && "max-lg:bottom-24")}
         >
           <motion.button layout="position" className="flex w-full items-center gap-2.5 px-4 py-3 text-left text-[13px] hover:bg-muted/50" onClick={() => setOpen(!open)}>
             <AnimatePresence mode="wait" initial={false}>

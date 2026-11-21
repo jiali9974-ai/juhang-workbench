@@ -2,9 +2,9 @@
 
 设置存在 data/settings/look.json，出片时读取：
   smooth  局部磨皮强度 0–1（0 = 不磨）。0.5 对应 1234_01 磨皮试片的力度。
-  tone    提亮调色强度 0–1（0 = 不额外调色）。通透中间调、自然红润肤色与浅蓝，保护中性白与深色
+  tone    提亮调色强度 0–1（0 = 不额外调色）。温和提亮中间调，保留人物、服饰和产品色相
   sharpen 手表特写锐化强度 0–1（0 = 不锐化）。只用在没有人脸的画面
-  normalize 统一光线：不同素材先按老板肤色拉齐亮度和白平衡，再调色（见 normalize.py）
+  normalize 按片段校正曝光与白平衡，保留不同人物肤色（见 normalize.py）
 """
 from __future__ import annotations
 
@@ -67,7 +67,7 @@ def filters(s: dict | None = None) -> dict:
     out = {"normalize": False, "smooth": 0.0, "sharpen": "", "tone": ""}
     if not s["enabled"]:
         return out
-    out["normalize"] = s["normalize"]           # 统一光线：每条素材按人脸肤色拉齐亮度和白平衡（见 normalize.py）
+    out["normalize"] = s["normalize"]
     out["smooth"] = s["smooth"]
     if s["sharpen"] > 0.01:
         out["sharpen"] = f"unsharp=lx=5:ly=5:la={0.45 * s['sharpen']:.2f}:cx=5:cy=5:ca=0"

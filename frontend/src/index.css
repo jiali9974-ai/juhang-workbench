@@ -127,6 +127,14 @@ html {
   .soft-shadow { box-shadow: 0 1px 2px oklch(0.25 0.02 260 / 5%), 0 4px 16px oklch(0.25 0.02 260 / 5%); }
   .lift-shadow { box-shadow: 0 2px 6px oklch(0.25 0.02 260 / 6%), 0 16px 40px oklch(0.25 0.02 260 / 10%); }
   .scrollbar-thin { scrollbar-width: thin; scrollbar-color: oklch(0.25 0.02 260 / 18%) transparent; }
+  .scroll-region {
+    overflow-y: auto;
+    overscroll-behavior-y: contain;
+    scrollbar-gutter: stable;
+    scrollbar-width: thin;
+    scrollbar-color: oklch(0.25 0.02 260 / 28%) transparent;
+  }
+  .scroll-region:focus-visible { outline: 2px solid var(--ring); outline-offset: -2px; }
 }
 
 /* ---------- 交互动效 ---------- */

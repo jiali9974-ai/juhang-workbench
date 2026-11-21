@@ -246,7 +246,7 @@ export function BatchPage({ batch, tab }: { batch: string; tab: BatchTab }) {
         >
           {tab === "scripts" ? <ScriptGrid batch={batch} scripts={scripts} /> : (
             <>
-              {b.clips > 0 && <div className="mb-5"><ClipSources batch={batch} queue={queue} onChanged={refresh} /></div>}
+              {b.clips > 0 && <div className="mb-5 rounded-2xl border bg-card p-4"><ClipSources batch={batch} queue={queue} onChanged={refresh} /></div>}
               <ClipLibrary batch={batch} clips={clips} />
             </>
           )}
@@ -363,36 +363,44 @@ function ClipLibrary({ batch, clips }: { batch: string; clips: Clip[] }) {
     setOpen(await api.transcript(batch, c.clip))
   }
   return (
-    <div className="grid gap-5 xl:grid-cols-[1fr_420px]">
-      <Stagger className="grid content-start gap-2.5 sm:grid-cols-2 2xl:grid-cols-3">
-        {clips.map((c) => {
-          const y = c.lang.yue ?? 0
-          const z = c.lang.zh ?? 0
-          return (
-            <StaggerItem key={c.clip}>
-            <button
-              onClick={() => show(c)}
-              className={cn("lift soft-shadow grid w-full grid-cols-[56px_1fr] gap-3 rounded-xl border bg-card p-2.5 text-left hover:border-primary/40", open?.clip === c.clip && "border-primary/50 bg-primary/5")}
-            >
-              <img loading="lazy" src={urls.thumb(batch, c.clip, Math.min(3, c.duration / 2))} className="h-[100px] w-14 rounded-md bg-muted object-cover" />
-              <div className="min-w-0">
-                <div className="flex items-center justify-between gap-2">
-                  <span className="truncate text-[13px] font-semibold">{shortClip(c.clip)}</span>
-                  <span className="text-xs text-muted-foreground tabular">{mmss(c.duration)}</span>
-                </div>
-                {c.transcribed ? (
-                  <>
-                    <LangBar yue={y} zh={z} className="mt-2 mb-1.5 h-1.5" />
-                    <div className="text-[11px] text-muted-foreground">{c.sentences} 句 · 粤 {Math.round(y)}s · 普 {Math.round(z)}s</div>
-                    <div className="mt-1 line-clamp-2 text-xs text-muted-foreground/90">{c.preview_text}</div>
-                  </>
-                ) : <div className="mt-2 text-xs text-muted-foreground">未识别</div>}
-              </div>
-            </button>
-            </StaggerItem>
-          )
-        })}
-      </Stagger>
+    <div className="grid items-start gap-5 xl:grid-cols-[1fr_420px]">
+      <section className="min-w-0 overflow-hidden rounded-2xl border bg-card">
+        <div className="flex items-center justify-between border-b px-4 py-3 text-sm">
+          <span className="font-medium">全部素材</span>
+          <span className="text-xs text-muted-foreground tabular">{clips.length} 个视频</span>
+        </div>
+        <div role="region" aria-label="项目视频素材列表" tabIndex={0} className="scroll-region max-h-[min(60svh,40rem)] p-3">
+          <Stagger className="grid content-start gap-2.5 sm:grid-cols-2 2xl:grid-cols-3">
+            {clips.map((c) => {
+              const y = c.lang.yue ?? 0
+              const z = c.lang.zh ?? 0
+              return (
+                <StaggerItem key={c.clip}>
+                <button
+                  onClick={() => show(c)}
+                  className={cn("lift soft-shadow grid w-full grid-cols-[56px_1fr] gap-3 rounded-xl border bg-card p-2.5 text-left hover:border-primary/40", open?.clip === c.clip && "border-primary/50 bg-primary/5")}
+                >
+                  <img loading="lazy" src={urls.thumb(batch, c.clip, Math.min(3, c.duration / 2))} className="h-[100px] w-14 rounded-md bg-muted object-cover" />
+                  <div className="min-w-0">
+                    <div className="flex items-center justify-between gap-2">
+                      <span className="truncate text-[13px] font-semibold">{shortClip(c.clip)}</span>
+                      <span className="text-xs text-muted-foreground tabular">{mmss(c.duration)}</span>
+                    </div>
+                    {c.transcribed ? (
+                      <>
+                        <LangBar yue={y} zh={z} className="mt-2 mb-1.5 h-1.5" />
+                        <div className="text-[11px] text-muted-foreground">{c.sentences} 句 · 粤 {Math.round(y)}s · 普 {Math.round(z)}s</div>
+                        <div className="mt-1 line-clamp-2 text-xs text-muted-foreground/90">{c.preview_text}</div>
+                      </>
+                    ) : <div className="mt-2 text-xs text-muted-foreground">未识别</div>}
+                  </div>
+                </button>
+                </StaggerItem>
+              )
+            })}
+          </Stagger>
+        </div>
+      </section>
       <div className="xl:sticky xl:top-4 xl:self-start">
         <AnimatePresence mode="wait">
         {open ? (
@@ -408,7 +416,7 @@ function ClipLibrary({ batch, clips }: { batch: string; clips: Clip[] }) {
               <b className="text-sm">{shortClip(open.clip)} 识别文字</b>
               <span className="text-xs text-muted-foreground">{open.sentences.length} 句 · {mmss(open.duration)}</span>
             </div>
-            <div className="scrollbar-thin max-h-[70vh] overflow-y-auto px-4 py-2">
+            <div role="region" aria-label="素材识别文字" tabIndex={0} className="scroll-region max-h-[min(60svh,40rem)] px-4 py-2">
               {open.sentences.map((s, i) => (
                 <motion.div key={i} initial={{ opacity: 0, x: 8 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: Math.min(i, 20) * 0.02, duration: 0.25 }} className="grid grid-cols-[86px_24px_1fr] gap-2 border-b border-dashed border-border py-1.5 text-[13px] last:border-0">
                   <span className="text-[11px] text-muted-foreground tabular">{tsec(s.start)}–{tsec(s.end)}</span>

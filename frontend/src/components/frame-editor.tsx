@@ -213,7 +213,7 @@ export function FrameEditor({ outputs, source, revision, header }: {
             <label className="flex items-center justify-between text-sm">开启美颜调色<input type="checkbox" className="size-4 accent-[var(--foreground)]" checked={editor.look.enabled} onChange={(e) => changeLook({ enabled: e.target.checked })} /></label>
             <label className="flex items-center justify-between text-sm">统一不同素材的光线<input type="checkbox" className="size-4 accent-[var(--foreground)]" disabled={!editor.look.enabled} checked={editor.look.normalize} onChange={(e) => changeLook({ normalize: e.target.checked })} /></label>
             <Range label="磨皮" value={editor.look.smooth} onChange={(smooth) => changeLook({ smooth })} disabled={!editor.look.enabled} hint="局部柔化肤质，保护眼眉和嘴唇。" />
-            <Range label="提亮调色" value={editor.look.tone} onChange={(tone) => changeLook({ tone })} disabled={!editor.look.enabled} hint="通透提亮、自然红润肤色与干净浅蓝，保留黑白层次。" />
+            <Range label="提亮调色" value={editor.look.tone} onChange={(tone) => changeLook({ tone })} disabled={!editor.look.enabled} hint="温和提亮中间调，保留肤色、服饰和产品色相。" />
             <Range label="手表特写锐化" value={editor.look.sharpen} onChange={(sharpen) => changeLook({ sharpen })} disabled={!editor.look.enabled} hint="作用于没有人脸的特写画面。" />
           </section> : <>
             <section className="rounded-2xl border p-4">

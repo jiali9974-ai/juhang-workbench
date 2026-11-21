@@ -1,19 +1,13 @@
-"""按素材统一亮度和白平衡。
+"""按片段温和校正曝光与白平衡，保留不同人物的肤色。
 
-不同天、不同地方拍的素材光线不一样（实测 9.23 那批人脸比 1234 亮很多，1234 自己每条之间也差不少）。
-出片时先量每条素材里老板脸上皮肤的亮度和颜色，把它拉到同一个基准，再套统一的美颜调色。
-这样不管素材原来是什么光线，成片的肤色和亮度都差不多。
-
-- 基准是 1234 这批素材的典型肤色。美颜调色就是照这批调的，照参考视频对过亮度，所以拉到这个基准再调色就和参考视频一致。
-- 每段在段内量几帧人脸算校正值，整段用同一个值，不会闪。量不到人脸的段（手表特写）用整条素材有人脸的画面量出来的值
-  （同一次拍摄灯光一样；实测同一条里没人脸和有人脸的画面亮度中位数只差 0–16%）。
-- 亮度像调相机曝光：中间调拉到目标，纯白还是纯白、纯黑还是纯黑，颜色浓度跟着亮度一起变，不会压暗后变艳。
-- 白平衡只校一半、每个通道最多 ±6%：不同人肤色本来就不同，只去掉明显的偏色。
-- 从头到尾都没拍到脸的素材：只按画面里接近白色的地方轻微校白平衡，不动亮度。
+人脸亮度落在正常区间时不拉齐；明显过暗或过亮才向区间边界校正。
+白平衡取自场景中性亮处，不用另一人的肤色 RGB 推算。每段只用一组校正值，
+避免逐帧闪动；手表特写只校白平衡，不借用口播人脸的曝光。
 """
 from __future__ import annotations
 
 import json
+import hashlib
 import threading
 from functools import lru_cache
 from pathlib import Path
@@ -25,6 +19,8 @@ from . import cancellation, config
 
 W, H = 540, 960                         # 测光用的画面大小（够看清脸，速度快）
 FRAMES = 10                             # 每条素材均匀取多少帧测光
+PROFILE_VERSION = 2                     # 中性亮处现在包含有人脸的画面
+POLICY_VERSION = "adaptive-v1"
 LUMA = np.array([0.2126, 0.7152, 0.0722])
 _lock = threading.Lock()
 _mesh = None
@@ -33,9 +29,9 @@ _mesh = None
 def _cfg() -> dict:
     n = dict(config.load()["render"].get("normalize") or {})
     n.setdefault("enabled", True)
-    n.setdefault("target_skin", [137.5, 99.0, 84.0])        # 1234 那批 41 条素材脸上皮肤的中位数 RGB（调色前）
-    n.setdefault("max_ratio", 1.8)                          # 皮肤亮度最多提亮到 1.8 倍 / 压暗到 1/1.8
-    n.setdefault("wb", 0.06)                                # 白平衡每个通道最多校 ±6%
+    n.setdefault("exposure_range", [.47, .55])              # 调色前人脸亮度区间，不统一肤色
+    n.setdefault("max_ratio", 1.5)                          # 曝光校正上限
+    n.setdefault("wb", 0.04)
     return n
 
 
@@ -123,7 +119,9 @@ def clip_profile(clip: str) -> dict:
     p = Path(clip)
     cache = _cache_file(p)
     if cache.exists():
-        return json.loads(cache.read_text(encoding="utf-8"))
+        cached = json.loads(cache.read_text(encoding="utf-8"))
+        if cached.get("version") == PROFILE_VERSION:
+            return cached
     skins, neutrals = [], []
     for t in _times(0, media.probe(p).duration, FRAMES):
         img = grab(p, t)
@@ -132,12 +130,12 @@ def clip_profile(clip: str) -> dict:
         s = skin(img)
         if s:
             skins.append(s["rgb"])
-        else:
-            n = neutral(img)
-            if n:
-                neutrals.append(n)
+        n = neutral(img)
+        if n:
+            neutrals.append(n)
     out = {"skin": np.median(skins, axis=0).round(2).tolist() if skins else None, "faces": len(skins),
-           "neutral": np.median(neutrals, axis=0).round(2).tolist() if neutrals else None}
+           "neutral": np.median(neutrals, axis=0).round(2).tolist() if neutrals else None,
+           "version": PROFILE_VERSION}
     cache.parent.mkdir(parents=True, exist_ok=True)
     cache.write_text(json.dumps(out), encoding="utf-8")
     return out
@@ -146,40 +144,66 @@ def clip_profile(clip: str) -> dict:
 @lru_cache(maxsize=1024)
 def segment_profile(clip: str, start: float, dur: float, frames: int = 5) -> dict:
     """一段画面的灯光：段内均匀取几帧量皮肤颜色。同一条素材前后光线也可能变（相机自动曝光），所以按段量更准。"""
-    skins = []
+    skins, neutrals = [], []
     for t in _times(start, max(dur, 0.1), frames):
         img = grab(Path(clip), t)
         s = skin(img) if img is not None else None
         if s:
             skins.append(s["rgb"])
-    return {"skin": np.median(skins, axis=0).round(2).tolist() if skins else None, "faces": len(skins), "neutral": None}
+        n = neutral(img) if img is not None else None
+        if n:
+            neutrals.append(n)
+    return {"skin": np.median(skins, axis=0).round(2).tolist() if skins else None, "faces": len(skins),
+            "neutral": np.median(neutrals, axis=0).round(2).tolist() if neutrals else None}
 
 
-def correction(prof: dict, cfg: dict | None = None) -> dict | None:
+def correction(prof: dict, cfg: dict | None = None, *, min_faces: int = 2) -> dict | None:
     """算校正值：{"wb": (r, g, b) 三个通道的系数, "mid": (皮肤亮度, 目标亮度) 0–1, "k": 颜色浓度跟着亮度变的倍数}。
     不用校正返回 None。"""
     cfg = cfg or _cfg()
     if not cfg["enabled"]:
         return None
-    if prof.get("skin") and prof.get("faces", 0) >= 2:
-        t = np.array(cfg["target_skin"], np.float64)
-        m = np.maximum(np.array(prof["skin"], np.float64), 1)
-        # 白平衡：每个人肤色本来就不一样（1234 和 9.x 出镜的不是同一个人），所以只校一半、最多 ±wb，只去掉明显的偏色
-        wb = (t / m) / (LUMA @ t / (LUMA @ m))
-        wb = 1 + 0.5 * (wb / (LUMA @ wb) - 1)
-        wb = np.clip(wb, 1 - cfg["wb"], 1 + cfg["wb"])
-        my, ty = float(LUMA @ m) / 255, float(LUMA @ t) / 255
-        r = cfg["max_ratio"]
-        ty = float(np.clip(ty, my / r, my * r))
-        k = float(np.clip(ty / my, 0.8, 1.25))
-        return {"wb": tuple(round(float(v), 4) for v in wb), "mid": (round(my, 4), round(ty, 4)), "k": round(k, 4),
-                "source": "face"}
+    wb = np.ones(3, np.float64)
     if prof.get("neutral"):
         m = np.maximum(np.array(prof["neutral"], np.float64), 1)
         wb = (LUMA @ m) / m
-        wb = np.clip(1 + 0.5 * (wb / (LUMA @ wb) - 1), 0.94, 1.06)
-        return {"wb": tuple(round(float(v), 4) for v in wb), "mid": None, "source": "neutral"}
+        wb = np.clip(1 + 0.5 * (wb / (LUMA @ wb) - 1), 1 - cfg["wb"], 1 + cfg["wb"])
+    wb = tuple(round(float(v), 4) for v in wb)
+    if prof.get("skin") and prof.get("faces", 0) >= min_faces:
+        m = np.maximum(np.array(prof["skin"], np.float64), 1)
+        my = float(LUMA @ m) / 255
+        ty = float(np.clip(my, *cfg["exposure_range"]))
+        r = cfg["max_ratio"]
+        ty = float(np.clip(ty, my / r, my * r))
+        k = float(np.clip(ty / my, 0.8, 1.25))
+        return {"wb": wb, "mid": (round(my, 4), round(ty, 4)), "k": round(k, 4),
+                "source": "face"}
+    if prof.get("neutral"):
+        return {"wb": wb, "mid": None, "source": "neutral"}
     return None
+
+
+def policy_key() -> str:
+    """已保存的预览校正只在算法和配置一致时复用。"""
+    payload = json.dumps([POLICY_VERSION, _cfg()], sort_keys=True)
+    return hashlib.sha256(payload.encode()).hexdigest()[:16]
+
+
+@lru_cache(maxsize=128)
+def _image_profile(path: str, modified: int, size: int) -> dict:
+    from PIL import Image
+
+    with Image.open(path) as source:
+        img = np.asarray(source.convert("RGB").resize((W, H)))
+    s = skin(img)
+    return {"skin": s["rgb"] if s else None, "faces": int(s is not None), "neutral": neutral(img)}
+
+
+def still_filter(image: Path) -> str:
+    """旧封面原图仍能独立预览；旧版本光线参数按原图重算，不再沿用固定肤色目标。"""
+    stat = image.stat()
+    prof = _image_profile(str(image), stat.st_mtime_ns, stat.st_size)
+    return to_filter(correction(prof, min_faces=1))
 
 
 def to_filter(c: dict | None) -> str:
@@ -212,12 +236,12 @@ def clip_filter(clip: Path) -> str:
 
 
 def segment_filter(clip: Path, start: float, dur: float) -> str:
-    """这一段的统一亮度/白平衡滤镜：段里量得到人脸就按这段的肤色校；量不到（手表特写）就用整条素材的。
+    """按段测光；无人脸特写只校白平衡，不能借用整条素材的人脸曝光。
     出片、预览、封面都用这个。量不出来返回空字符串，不影响出片。"""
     try:
         prof = segment_profile(str(clip), round(float(start), 2), round(float(dur), 2))
-        if not (prof["skin"] and prof["faces"] >= 2):
-            prof = clip_profile(str(clip))
+        if not (prof["skin"] and prof["faces"] >= 2) and not prof.get("neutral"):
+            prof = {**prof, "neutral": clip_profile(str(clip)).get("neutral")}
         return to_filter(correction(prof))
     except Exception:  # noqa: BLE001
         return ""

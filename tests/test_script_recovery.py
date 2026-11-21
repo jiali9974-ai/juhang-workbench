@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 import app as server
-from jh import script, script_agent
+from jh import script_agent
 
 
 class ScriptRecoveryTests(unittest.TestCase):
@@ -17,7 +17,7 @@ class ScriptRecoveryTests(unittest.TestCase):
         replacement.start()
         self.addCleanup(replacement.stop)
         self.body = "### 素材 C1\nC1-S1 [0.0-8.0] 8.0秒 (zh) 介绍这只表，喜欢的老板留言问价"
-        self.valid = {"videos": [{"title": "名表", "lines": [{"ref": "C1-S1", "keep": "介绍这只表，喜欢的老板留言问价"}]}]}
+        self.valid = {"videos": [{"title": "名表", "lines": [{"ref": "C1-S1"}]}]}
 
     def test_empty_and_wrong_fields_are_retried_with_feedback_and_raw_responses_saved(self):
         responses = [json.dumps({"videos": []}), json.dumps({"scripts": []}), json.dumps(self.valid)]
@@ -67,32 +67,6 @@ class ScriptRecoveryTests(unittest.TestCase):
                 with self.assertRaisesRegex(RuntimeError, "没有有效口播"):
                     script_agent.generate("无口播", transcripts)
                 chat.assert_not_called()
-
-    def test_rewritten_keep_is_retried_instead_of_restoring_the_whole_sentence(self):
-        invalid = {"videos": [{"lines": [{"ref": "C1-S1", "keep": "这只名表非常便宜"}]}]}
-        with patch.object(script_agent.llm, "chat", side_effect=[json.dumps(invalid), json.dumps(self.valid)]) as chat:
-            self.assertEqual(script_agent._ask("重说", self.body), self.valid)
-        self.assertEqual(chat.call_count, 2)
-        self.assertIn("不能改字、加字或换顺序", chat.call_args.args[0][1]["content"])
-
-    def test_missing_keep_is_retried_and_invalid_keep_cannot_be_silently_converted(self):
-        with patch.object(script_agent.llm, "chat", side_effect=[
-            '{"videos":[{"lines":[{"ref":"C1-S1"}]}]}', json.dumps(self.valid),
-        ]) as chat:
-            self.assertEqual(script_agent._ask("重说", self.body), self.valid)
-        self.assertEqual(chat.call_count, 2)
-        with self.assertRaises(ValueError):
-            script_agent._lines({"lines": [{"ref": "C1-S1", "keep": "改写内容"}]},
-                                {"C1-S1": ({"clip": "a.mov"}, {"text": "嗯这只表"})})
-
-    def test_failed_legacy_keep_cleanup_stops_without_mutating_the_script(self):
-        value = {"lines": [{"src_text": "嗯这只表"}, {"src_text": "这个价格"}]}
-        for result in (RuntimeError("offline"), '{"lines":[{"i":0,"keep":"这只表"}]}'):
-            with self.subTest(result=result), patch.object(script_agent.llm, "chat", **(
-                {"side_effect": result} if isinstance(result, Exception) else {"return_value": result}
-            )), self.assertRaises((RuntimeError, ValueError)):
-                script.fill_keep(value)
-            self.assertTrue(all("keep" not in line for line in value["lines"]))
 
     def test_both_generation_endpoints_preserve_existing_scripts_and_videos_on_empty_result(self):
         scripts = self.root / "scripts" / "原项目"

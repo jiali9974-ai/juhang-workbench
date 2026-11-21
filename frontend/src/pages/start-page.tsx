@@ -72,13 +72,13 @@ export function StartPage() {
   }
 
   return (
-    <div className="flex min-h-svh flex-col bg-background pt-17">
-      <main className="mx-auto flex w-full max-w-4xl flex-1 flex-col px-6 pt-10 pb-24 md:pt-12">
+    <div className="flex h-svh min-h-[38rem] flex-col bg-background">
+      <main className="mx-auto flex min-h-0 w-full max-w-4xl flex-1 flex-col justify-center px-6 py-8 md:py-10">
         <motion.h1
           initial={{ opacity: 0, y: 10 }}
           animate={{ opacity: 1, y: 0 }}
           transition={{ duration: 0.5, ease }}
-          className="mt-auto text-center text-4xl font-bold tracking-tight md:text-5xl"
+          className="shrink-0 text-center text-4xl font-bold tracking-tight md:text-5xl"
         >
           上传素材
         </motion.h1>
@@ -102,7 +102,7 @@ export function StartPage() {
               .catch((error) => toast.error("读取素材失败", { description: msg(error) }))
           }}
           className={cn(
-            "mt-10 flex min-h-72 cursor-pointer flex-col items-center justify-center rounded-3xl border-2 border-dashed px-6 py-12 text-center transition-all duration-200 outline-none focus-visible:ring-2 focus-visible:ring-foreground/30 md:min-h-88",
+            "mt-6 flex min-h-44 shrink-0 cursor-pointer flex-col items-center justify-center rounded-3xl border-2 border-dashed px-6 py-6 text-center transition-all duration-200 outline-none focus-visible:ring-2 focus-visible:ring-foreground/30 md:min-h-52",
             over ? "scale-[1.01] border-foreground bg-muted/70" : "border-border bg-muted/25 hover:border-foreground/30 hover:bg-muted/50",
           )}
         >
@@ -137,10 +137,10 @@ export function StartPage() {
           onChange={(e) => { const f = Array.from(e.target.files ?? []); e.target.value = ""; if (f.length) addFiles(f, folderOf(f)) }}
         />
 
-        <UploadGroups items={queue.items} maxVisibleItems={4} submitted={started} clearable={false} />
+        <UploadGroups items={queue.items} submitted={started} clearable={false} />
 
         {/* 工作台 / 开始 */}
-        <div className="mt-auto flex shrink-0 flex-col items-center gap-3 pt-12 text-center">
+        <div className="mt-6 flex shrink-0 flex-col items-center gap-3 text-center">
           <div className="flex items-center justify-center gap-3">
             <Button
               variant="outline"

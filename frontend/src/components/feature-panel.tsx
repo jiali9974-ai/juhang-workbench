@@ -79,67 +79,75 @@ export function FeaturePanel({ header, items, active, onActive, empty, aside, fo
   const cur = items[Math.min(active, items.length - 1)]
   const right = aside ?? cur?.media
   return (
-    <div className="grid grid-cols-1 gap-10 lg:grid-cols-2 lg:items-start lg:gap-16">
-      <div className={cn("min-w-0", footer && "flex flex-col lg:min-h-[calc(100svh-13rem)]")}>
-        {header}
-        {items.length === 0 ? empty : (
-          <ul className="flex flex-col gap-1">
-            {items.map((item, index) => {
-              const on = cur?.key === item.key
-              return (
-                <motion.li
-                  key={item.key}
-                  initial={{ opacity: 0, y: 8 }}
-                  animate={{ opacity: 1, y: 0 }}
-                  transition={{ duration: 0.35, delay: Math.min(index, 12) * 0.05, ease: "easeOut" }}
-                  onClick={() => onActive(index)}
-                  className={cn(
-                    "flex cursor-pointer flex-col rounded-xl px-4 py-3.5 transition-all duration-200",
-                    on ? "ring-1 ring-foreground" : "ring-1 ring-transparent hover:bg-muted/60",
-                  )}
-                >
-                  <div className="flex w-full items-center gap-4">
-                    <span
+    <div className="grid min-h-0 flex-1 grid-cols-1 gap-6 lg:grid-cols-2 lg:items-stretch lg:gap-16">
+      <div className="flex min-h-0 min-w-0 flex-col">
+        <div className="shrink-0">{header}</div>
+        <section className="flex min-h-0 flex-1 flex-col overflow-hidden rounded-2xl border bg-card">
+          <div className="flex shrink-0 items-center justify-between border-b px-4 py-3 text-sm">
+            <span className="font-medium">全部项目</span>
+            <span className="text-xs text-muted-foreground tabular">{items.length} 个项目</span>
+          </div>
+          <div role="region" aria-label="素材项目列表" tabIndex={0} className="scroll-region min-h-0 flex-1 p-2">
+            {items.length === 0 ? empty : (
+              <ul className="flex flex-col gap-1 p-0.5">
+                {items.map((item, index) => {
+                  const on = cur?.key === item.key
+                  return (
+                    <motion.li
+                      key={item.key}
+                      initial={{ opacity: 0, y: 8 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      transition={{ duration: 0.35, delay: Math.min(index, 12) * 0.05, ease: "easeOut" }}
+                      onClick={() => onActive(index)}
                       className={cn(
-                        "flex size-7 shrink-0 items-center justify-center rounded-full text-xs font-medium tabular transition-colors duration-200",
-                        on ? "bg-foreground text-background" : "bg-muted text-muted-foreground",
+                        "flex cursor-pointer flex-col rounded-xl px-4 py-3.5 transition-all duration-200",
+                        on ? "ring-1 ring-foreground" : "ring-1 ring-transparent hover:bg-muted/60",
                       )}
                     >
-                      {index + 1}
-                    </span>
-                    <span className={cn("min-w-0 flex-1 truncate text-sm font-medium transition-colors duration-200", on ? "text-foreground" : "text-muted-foreground")}>
-                      {item.title}
-                    </span>
-                    {item.badge}
-                  </div>
+                      <div className="flex w-full items-center gap-4">
+                        <span
+                          className={cn(
+                            "flex size-7 shrink-0 items-center justify-center rounded-full text-xs font-medium tabular transition-colors duration-200",
+                            on ? "bg-foreground text-background" : "bg-muted text-muted-foreground",
+                          )}
+                        >
+                          {index + 1}
+                        </span>
+                        <span title={typeof item.title === "string" ? item.title : undefined} className={cn("min-w-0 flex-1 truncate text-sm font-medium transition-colors duration-200", on ? "text-foreground" : "text-muted-foreground")}>
+                          {item.title}
+                        </span>
+                        {item.badge}
+                      </div>
 
-                  <AnimatePresence initial={false}>
-                    {on && (
-                      <motion.div
-                        initial={{ height: 0, opacity: 0 }}
-                        animate={{ height: "auto", opacity: 1 }}
-                        exit={{ height: 0, opacity: 0 }}
-                        transition={{ duration: 0.35, ease: smooth }}
-                        className="w-full overflow-hidden"
-                      >
-                        {item.detail && <div className="pt-2.5 pl-11">{item.detail}</div>}
-                        {!aside && (
-                          <div className="mt-3 lg:hidden">
-                            <MediaFrame>{item.media}</MediaFrame>
-                          </div>
+                      <AnimatePresence initial={false}>
+                        {on && (
+                          <motion.div
+                            initial={{ height: 0, opacity: 0 }}
+                            animate={{ height: "auto", opacity: 1 }}
+                            exit={{ height: 0, opacity: 0 }}
+                            transition={{ duration: 0.35, ease: smooth }}
+                            className="w-full overflow-hidden"
+                          >
+                            {item.detail && <div className="pt-2.5 pl-11">{item.detail}</div>}
+                            {!aside && (
+                              <div className="mt-3 lg:hidden">
+                                <MediaFrame>{item.media}</MediaFrame>
+                              </div>
+                            )}
+                          </motion.div>
                         )}
-                      </motion.div>
-                    )}
-                  </AnimatePresence>
-                </motion.li>
-              )
-            })}
-          </ul>
-        )}
-        {footer && <div className="mt-auto pt-8">{footer}</div>}
+                      </AnimatePresence>
+                    </motion.li>
+                  )
+                })}
+              </ul>
+            )}
+          </div>
+        </section>
+        {footer && <div className="shrink-0 pt-4">{footer}</div>}
       </div>
 
-      <div className={cn("lg:sticky lg:top-10", !aside && "hidden lg:block", !aside && !cur && "lg:hidden")}>
+      <div className={cn("min-h-0", !aside && "hidden lg:block", !aside && !cur && "lg:hidden")}>
         <MediaFrame>
           <AnimatePresence mode="wait">
             <motion.div
