@@ -30,6 +30,7 @@ class ShortSegmentTests(unittest.TestCase):
         self.root = Path(temporary.name)
         self.cfg = copy.deepcopy(config.load())
         self.cfg["render"]["short_segment_filter"] = {"enabled": True}
+        self.cfg["render"]["opening_cut"] = {"enabled": False}
         for target, value in (("load", self.cfg), ("data_root", self.root)):
             mock = patch.object(config, target, return_value=value)
             mock.start()

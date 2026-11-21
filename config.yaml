@@ -54,6 +54,7 @@ render:
   segment_gap: {first_lead: 0.02, lead: 0.05, tail: 0.05, final_tail: 0.2}   # 片头留 0.02 秒，普通切点前后各留 0.05 秒，片尾留 0.2 秒
   silence_cut: {threshold: 0.35}           # 超过 0.35 秒无人声时同步裁掉音画，切点前后各留 0.05 秒；明确删掉的口误不受阈值限制
   short_segment_filter: {enabled: true}   # 不足 0.7 秒仅比较前段尾→本段首、本段尾→后段首；有连续重复字就删，无重复保留
+  opening_cut: {enabled: true, max_lead: 0.1, search_seconds: 5.0}  # 最终片头重新定位开口；异常首字由原声及本地识别复核
   width: 1440
   height: 2560
   fps: 60

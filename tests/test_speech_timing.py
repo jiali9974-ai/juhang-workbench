@@ -19,7 +19,7 @@ class SpeechTimingTests(unittest.TestCase):
         self.cfg = copy.deepcopy(config.load())
         self.cfg["render"].update(width=90, height=160, fps=60, encoder="libx264",
                                   segment_gap={"first_lead": .02, "lead": .05, "tail": .05, "final_tail": .2},
-                                  silence_cut={"threshold": 1.0})
+                                  silence_cut={"threshold": 1.0}, opening_cut={"enabled": False})
         for target, value in [("load", lambda: self.cfg), ("data_root", lambda: self.root)]:
             replacement = patch.object(config, target, value)
             replacement.start()

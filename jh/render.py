@@ -13,7 +13,7 @@ from pathlib import Path
 import cv2
 import numpy as np
 
-from . import cancellation, config, fonts, graphics, look, media, script as scriptmod, short_segments
+from . import cancellation, config, fonts, graphics, look, media, opening, script as scriptmod, short_segments
 
 PUNCT_STRIP = "，。,.！!？?、；;：: "
 
@@ -307,7 +307,8 @@ def has_face(clip: Path, t: float) -> bool:
 
 # ---------------- 规划分段 ----------------
 
-def plan(script: dict, progress=None, *, short_report: dict | None = None) -> list[Segment]:
+def plan(script: dict, progress=None, *, short_report: dict | None = None,
+         opening_report: dict | None = None) -> list[Segment]:
     cfg = config.load()
     max_chars = cfg["style"]["subtitle"]["max_chars_per_line"]
     material = config.material_root() / script["batch"]
@@ -366,10 +367,29 @@ def plan(script: dict, progress=None, *, short_report: dict | None = None) -> li
         raise ValueError("所选片段没有检测到有效人声，请检查素材、识别时间或重新生成脚本")
     # 短镜头仅按实际原话与前后镜头首尾衔接处的重复字过滤；音画和字幕同步删除。
     segs, report = short_segments.filter_segments(segs, progress)
+    report["opening_rechecks"] = []
     if short_report is not None:
         short_report.update(report)
     if not segs:
         raise ValueError("裁剪后的片段均不足 0.7 秒且均被短段规则过滤，已停止出片；请调整所选片段")
+    if progress:
+        progress(0, 1, "检查最终片头开口")
+    while segs:
+        head = opening.trim(segs[0], _clip_audio, report=opening_report)
+        if head.v_dur < short_segments.THRESHOLD and head.v_start > segs[0].v_start:
+            # 去掉准备声后首段可能变成短段；只复核首段，其他镜头仍沿用过滤前的比较结果。
+            _, recheck = short_segments.filter_segments([head, *segs[1:2]])
+            decision = recheck["candidates"][0]
+            report["opening_rechecks"].append(decision)
+            if not decision["retained"]:
+                segs = segs[1:]
+                continue
+        segs[0] = head
+        break
+    if not segs:
+        if opening_report is not None:
+            opening_report.update(status="rejected", reason="片头裁剪并复核短段后没有可用镜头")
+        raise ValueError("片头裁剪并复核短段后没有可用镜头，请调整所选片段")
     rcfg = cfg["render"]
     for s in segs:
         if s.zoom is None:
@@ -658,13 +678,16 @@ def render(script: dict, progress=None, on_stage=None, *, settings: dict | None 
 
     if on_stage:
         on_stage("look")
-    short_report = {}
+    short_report, opening_report = {}, {}
     try:
-        segs = plan(script, progress, short_report=short_report)
+        segs = plan(script, progress, short_report=short_report, opening_report=opening_report)
     finally:
         if short_report:
             (work / "short_segment_review.json").write_text(
                 json.dumps(short_report, ensure_ascii=False, indent=2), encoding="utf-8")
+        if opening_report:
+            (work / "opening_check.json").write_text(
+                json.dumps(opening_report, ensure_ascii=False, indent=2), encoding="utf-8")
     (work / "edit_timeline.json").write_text(json.dumps({
         "version": 1, "script": script["id"],
         "segments": [{"clip": str(s.clip), "start": s.v_start, "duration": s.v_dur,
@@ -701,7 +724,13 @@ def render(script: dict, progress=None, on_stage=None, *, settings: dict | None 
     # 输出目录仅发布完整成片；取消重新生成时保留原来的成片。
     with tempfile.TemporaryDirectory(prefix=".render-", dir=out_dir) as temporary:
         pending = Path(temporary) / out.name
-        total = compose_segments(segs, work, pending, progress, cover=cover, settings=settings, on_stage=on_stage, design=design)
+        try:
+            total = compose_segments(segs, work, pending, progress, cover=cover, settings=settings,
+                                     on_stage=on_stage, design=design, opening_report=opening_report)
+        finally:
+            if opening_report:
+                (work / "opening_check.json").write_text(
+                    json.dumps(opening_report, ensure_ascii=False, indent=2), encoding="utf-8")
         cover_jpg = work / f"{script['id']}_封面.jpg"
         if cover and cover_jpg.exists():
             embed_cover(pending, cover_jpg)
@@ -740,7 +769,8 @@ def embed_cover(video: Path, cover_jpg: Path) -> None:
 
 
 def compose_segments(segs: list[Segment], work: Path, out: Path, progress=None,
-                     cover: Path | None = None, settings: dict | None = None, on_stage=None, design: dict | None = None) -> float:
+                     cover: Path | None = None, settings: dict | None = None, on_stage=None, design: dict | None = None,
+                     opening_report: dict | None = None) -> float:
     """逐段编码 → 拼接 → 烧字幕和角标（左上角竖排黄字、底部声明）、响度统一、混背景音乐 → 导出 out。返回总时长。
     素材剪辑统一使用这一套成片样式。"""
     cfg = config.load()
@@ -762,6 +792,8 @@ def compose_segments(segs: list[Segment], work: Path, out: Path, progress=None,
     (work / "concat.txt").write_text("".join(f"file '{f.name}'\n" for f in seg_files), encoding="utf-8")
     media.run_ffmpeg(["-f", "concat", "-safe", "0", "-i", str(work / "concat.txt"), "-c", "copy",
                       str(work / "body.mp4")])
+    if opening_report and "threshold_dbfs" in opening_report:
+        opening.check_encoded(_clip_audio(work / "body.mp4", 0, min(1.0, segs[0].v_dur)), AUDIO_SR, opening_report)
 
     total = sum(s.v_dur for s in segs)
     build_ass(segs, total, work / "video.ass", design=design)

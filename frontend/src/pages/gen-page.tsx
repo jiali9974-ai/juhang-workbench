@@ -50,6 +50,7 @@ export function GenPage() {
   }, [version, generating])
 
   const list = videos ?? []
+  const playing = preview && (list.find((video) => keyOf(video) === keyOf(preview)) ?? preview)
   const projects = new Map<string, OutputVideo[]>()
   for (const video of list) {
     const group = projects.get(video.batch)
@@ -198,7 +199,7 @@ export function GenPage() {
                       <div data-video-actions className="pointer-events-none absolute right-3 bottom-3 flex gap-2 opacity-0 transition-opacity duration-150 group-hover:pointer-events-auto group-hover:opacity-100 group-has-[:focus-visible]:pointer-events-auto group-has-[:focus-visible]:opacity-100">
                         <Button variant="secondary" size="icon" className="rounded-full shadow-sm" aria-label={`预览成片：${video.title}`} title="播放" onClick={() => setPreview(video)}><Play className="size-4" /></Button>
                         <Button variant="secondary" size="icon" asChild className="rounded-full shadow-sm">
-                          <a href={urls.output(video.batch, video.id)} download={`${video.id}.mp4`} aria-label={`下载成片：${video.title}`} title="下载"><Download className="size-4" /></a>
+                          <a href={`${urls.output(video.batch, video.id)}?v=${video.updated}`} download={`${video.id}.mp4`} aria-label={`下载成片：${video.title}`} title="下载"><Download className="size-4" /></a>
                         </Button>
                         <Button variant="secondary" size="icon" className="rounded-full shadow-sm hover:text-destructive" aria-label={`删除成片：${video.title}`} title="删除" disabled={busy} aria-busy={deleting === keyOf(video)} onClick={() => deleteVideos([video])}>
                           {deleting === keyOf(video) ? <Loader2 className="size-4 animate-spin" /> : <Trash2 className="size-4" />}
@@ -219,8 +220,8 @@ export function GenPage() {
         <Dialog.Portal>
           <Dialog.Overlay className="fixed inset-0 z-50 bg-black/75 backdrop-blur-sm" />
           <Dialog.Content aria-describedby={undefined} className="fixed top-1/2 left-1/2 z-50 w-[min(440px,calc(100vw-48px))] -translate-x-1/2 -translate-y-1/2 outline-none">
-            <Dialog.Title className="sr-only">{preview?.title}</Dialog.Title>
-            {preview && <video key={keyOf(preview)} src={urls.output(preview.batch, preview.id)} poster={`${urls.outputThumb(preview.batch, preview.id)}&v=${preview.updated}`} controls autoPlay playsInline className="max-h-[85svh] w-full rounded-2xl bg-black" />}
+            <Dialog.Title className="sr-only">{playing?.title}</Dialog.Title>
+            {playing && <video key={`${keyOf(playing)}:${playing.updated}`} src={`${urls.output(playing.batch, playing.id)}?v=${playing.updated}`} poster={`${urls.outputThumb(playing.batch, playing.id)}&v=${playing.updated}`} controls autoPlay playsInline className="max-h-[85svh] w-full rounded-2xl bg-black" />}
             <Dialog.Close asChild><Button size="icon" variant="secondary" className="absolute -top-4 -right-4 rounded-full" aria-label="关闭预览"><X /></Button></Dialog.Close>
           </Dialog.Content>
         </Dialog.Portal>

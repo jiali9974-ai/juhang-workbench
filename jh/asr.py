@@ -41,6 +41,23 @@ def _models():
 TRANSCRIPT_VERSION = 2       # 2：每句带逐字时间（words），用来在句子里面剪掉口误和停顿
 
 
+def recognize_audio(audio: np.ndarray, sr: int) -> str:
+    """复用本地 SenseVoice 核对片头原话，不保存或改写素材的整段识别结果。"""
+    from scipy.signal import resample_poly
+    from math import gcd
+
+    cancellation.check()
+    mono = audio.mean(axis=1) if audio.ndim == 2 else audio
+    divisor = gcd(sr, 16000)
+    signal = resample_poly(mono, 16000 // divisor, sr // divisor).astype(np.float32)
+    _, recognizer = _models()
+    result = recognizer.generate(input=signal, cache={}, language="auto", use_itn=True,
+                                ban_emo_unk=True, disable_pbar=True)[0]
+    cancellation.check()
+    _, text = _parse_tags(result["text"])
+    return text
+
+
 def _parse_tags(text: str) -> tuple[str, str]:
     tags = re.findall(r"<\|([^|]+)\|>", text)
     lang = next((t for t in tags if t in LANG_TAGS), "unknown")

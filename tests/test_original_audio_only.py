@@ -14,6 +14,7 @@ from jh import config, pipeline, render, script, script_agent
 class OriginalAudioTests(unittest.TestCase):
     def test_old_dubbing_choice_cannot_replace_source_audio(self):
         cfg = copy.deepcopy(config.load())
+        cfg["render"]["opening_cut"] = {"enabled": False}
         line = {"clip": "source.mov", "start": 1, "end": 3, "src_lang": "zh",
                 "src_text": "这是原声", "keep": "这是原声", "subtitle": "这是原声", "zoom": 1}
         old_script = {"batch": "项目", "voice_mode": "tts_all", "tts_engine": "ming", "lines": [line]}
