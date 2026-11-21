@@ -2,10 +2,13 @@
 from __future__ import annotations
 
 import hashlib
+import os
 import re
 import shutil
 import struct
+import sys
 import tempfile
+import xml.etree.ElementTree as ET
 from functools import lru_cache
 from pathlib import Path
 
@@ -153,3 +156,19 @@ def snapshot(directory: Path, font_ids: set[str] | None = None) -> None:
             continue
         path = (config.ROOT / "fonts" if item["builtin"] else _directory()) / item["file"]
         shutil.copy2(path, directory / path.name)
+
+
+def render_env(directory: Path) -> dict[str, str] | None:
+    """Linux Fontconfig 也需要看到快照目录，才能为粤语缺字找到回退字体。"""
+    if not sys.platform.startswith("linux"):
+        return None
+    directory = directory.resolve()
+    root = ET.Element("fontconfig")
+    ET.SubElement(root, "include", ignore_missing="yes").text = "/etc/fonts/fonts.conf"
+    ET.SubElement(root, "dir").text = str(directory)
+    ET.SubElement(root, "cachedir").text = str(directory.parent / "font-cache")
+    edit = ET.SubElement(ET.SubElement(root, "match", target="pattern"), "edit", name="family", mode="append_last")
+    ET.SubElement(edit, "string").text = resolve(default_id())[1]["family"]
+    path = directory.parent / "fonts.conf"
+    ET.ElementTree(root).write(path, encoding="utf-8", xml_declaration=True)
+    return {**os.environ, "FONTCONFIG_FILE": str(path)}

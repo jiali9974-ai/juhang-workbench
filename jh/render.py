@@ -878,7 +878,7 @@ def compose_segments(segs: list[Segment], work: Path, out: Path, progress=None,
         cmd = [cfg["paths"]["ffmpeg"], "-hide_banner", "-loglevel", "error", "-y", *inputs,
                "-filter_complex", filt, "-map", "[vout]", "-map", "1:a", "-t", f"{total:.3f}",
                *_venc(), "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", str(out.resolve())]
-        res = cancellation.run_process(cmd, cwd=work, capture_output=True, text=True, encoding="utf-8", errors="ignore")
+        res = cancellation.run_process(cmd, cwd=work, env=fonts.render_env(work / "fonts"), capture_output=True, text=True, encoding="utf-8", errors="ignore")
         if res.returncode != 0:
             raise RuntimeError(f"合成失败：{res.stderr[-2000:]}")
         return total
@@ -896,7 +896,7 @@ def compose_segments(segs: list[Segment], work: Path, out: Path, progress=None,
     cmd = [cfg["paths"]["ffmpeg"], "-hide_banner", "-loglevel", "error", "-y", *inputs,
            "-filter_complex", filt, "-map", "[vout]", "-map", "[aout]", "-t", f"{total:.3f}",
            *_venc(), "-c:a", "aac", "-b:a", "192k", "-movflags", "+faststart", str(out.resolve())]
-    res = cancellation.run_process(cmd, cwd=work, capture_output=True, text=True, encoding="utf-8", errors="ignore")
+    res = cancellation.run_process(cmd, cwd=work, env=fonts.render_env(work / "fonts"), capture_output=True, text=True, encoding="utf-8", errors="ignore")
     if res.returncode != 0:
         raise RuntimeError(f"合成失败：{res.stderr[-2000:]}")
     return total

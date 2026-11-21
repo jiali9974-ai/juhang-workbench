@@ -70,6 +70,7 @@ class GraphicsTests(unittest.TestCase):
         self.assertEqual(self.client.delete(f"/api/fonts/{item['id']}").status_code, 200)
         self.assertEqual(self.client.get(f"/api/fonts/{item['id']}/file").status_code, 404)
         self.assertEqual(self.client.delete("/api/fonts/SourceHanSansCN-Heavy").status_code, 400)
+        self.assertEqual(list((self.root / "fonts").iterdir()), [])
 
     def test_builtin_fonts_render_selected_faces_and_keep_only_needed_files(self):
         items = self.client.get("/api/graphics").json()["fonts"]
@@ -92,7 +93,7 @@ class GraphicsTests(unittest.TestCase):
                 result = subprocess.run([
                     config.ffmpeg(), "-nostdin", "-v", "info", "-f", "lavfi", "-i", "color=black:s=360x640:d=1",
                     "-vf", "subtitles=sample.ass:fontsdir=fonts", "-frames:v", "1", "-pix_fmt", "rgb24", "-f", "rawvideo", "pipe:1",
-                ], cwd=directory, capture_output=True)
+                ], cwd=directory, env=fonts.render_env(directory / "fonts"), capture_output=True)
                 log = result.stderr.decode("utf-8", "replace")
                 self.assertEqual(result.returncode, 0, log)
                 selected = postscript.get(item["file"], item["id"])
@@ -101,7 +102,6 @@ class GraphicsTests(unittest.TestCase):
                 self.assertGreater(max(result.stdout), 200)
                 pictures.add(result.stdout)
         self.assertEqual(len(pictures), len(builtin))
-        self.assertEqual(list((self.root / "fonts").iterdir()), [])
 
     def test_english_metadata_is_used_instead_of_windows_question_marks(self):
         catalog = {font["id"]: font for font in fonts.catalog()}
@@ -131,7 +131,7 @@ class GraphicsTests(unittest.TestCase):
         output = self.root / "actual.mp4"
         result = subprocess.run([config.ffmpeg(), "-nostdin", "-v", "error", "-y", "-f", "lavfi", "-i", "color=black:s=360x640:r=24:d=2",
                                  "-vf", "subtitles=video.ass:fontsdir=fonts", "-an", "-c:v", "libx264", "-preset", "ultrafast", str(output)],
-                                cwd=self.root, capture_output=True)
+                                cwd=self.root, env=fonts.render_env(self.root / "fonts"), capture_output=True)
         self.assertEqual(result.returncode, 0, result.stderr.decode(errors="replace"))
         frames = []
         with av.open(str(output)) as video:

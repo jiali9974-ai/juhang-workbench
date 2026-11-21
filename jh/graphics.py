@@ -245,7 +245,7 @@ def preview(data: dict, active_jobs: list[dict]) -> dict:
                 config.ffmpeg(), "-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-loop", "1", "-i", str(image.resolve()),
                 "-vf", "subtitles=preview.ass:fontsdir=fonts", "-t", "6", "-an", "-r", "24",
                 "-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p", "-movflags", "+faststart", "preview.tmp.mp4",
-            ], cwd=directory, capture_output=True, text=True, encoding="utf-8", errors="ignore")
+            ], cwd=directory, env=fonts.render_env(directory / "fonts"), capture_output=True, text=True, encoding="utf-8", errors="ignore")
             if result.returncode:
                 raise RuntimeError(f"效果预览生成失败：{result.stderr[-1000:]}")
             (directory / "preview.tmp.mp4").replace(output)
