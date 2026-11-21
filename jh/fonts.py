@@ -15,7 +15,14 @@ from . import config
 
 MAX_BYTES = 25 * 1024 * 1024
 BUILTINS = {
-    "SourceHanSansCN-Heavy.otf": "思源黑体 · 粗",
+    "SourceHanSansCN-Regular.otf": "黑体（思源）",
+    "SourceHanSansCN-Bold.otf": "黑体 · 粗体（思源）",
+    "SourceHanSansCN-Heavy.otf": "黑体 · 特粗（思源）",
+    "SourceHanSerifCN-Regular.otf": "宋体（思源）",
+    "SourceHanSerifCN-Bold.otf": "宋体 · 粗体（思源）",
+    "LXGWWenKai-Regular.ttf": "楷体（霞鹜文楷）",
+    "ZhuqueFangsong-Regular.ttf": "仿宋（朱雀仿宋）",
+    "ChillRoundFRegular.otf": "圆体（寒蝉全圆体）",
     "ZCOOLXiaoWei-Regular.ttf": "站酷小薇体",
     "ZCOOLKuaiLe-Regular.ttf": "站酷快乐体",
 }
@@ -48,7 +55,8 @@ def _family(path: Path, fallback: str) -> tuple[str, int]:
                 text = raw.decode("utf-16-be")
             except UnicodeError:
                 continue
-            score = (language == 1033, name == 1, platform == 3)
+            # ASS 的 \fn 标签会把半角括号当作语法；优先使用字体自身的安全别名。
+            score = (not re.search(r"[,{}\\()\r\n]", text), language == 1033, name == 1, platform == 3)
             candidates.append((score, text))
     return (max(candidates)[1] if candidates else fallback), weight
 
@@ -57,7 +65,7 @@ def _info(path: Path, builtin: bool) -> dict:
     font = ImageFont.truetype(str(path), 100)
     family, style = font.getname()
     family, weight = _family(path, family)
-    if re.search(r"[,{}\\\r\n]", family):
+    if re.search(r"[,{}\\()\r\n]", family):
         raise ValueError("字体名称包含不支持的字符")
     ascent, descent = font.getmetrics()
     return {"id": path.stem, "name": BUILTINS.get(path.name, family),
@@ -72,8 +80,9 @@ def _cached_info(path: str, modified: int, size: int, builtin: bool) -> dict:
 
 def catalog() -> list[dict]:
     result = []
+    order = {name: i for i, name in enumerate(BUILTINS)}
     for directory, builtin in ((config.ROOT / "fonts", True), (_directory(), False)):
-        for path in sorted(directory.iterdir()):
+        for path in sorted(directory.iterdir(), key=lambda path: (order.get(path.name, len(order)), path.name)):
             if path.suffix.lower() in (".ttf", ".otf") and path.is_file():
                 try:
                     stat = path.stat()
@@ -135,8 +144,12 @@ def delete(font_id: str, settings: dict) -> None:
     path.unlink()
 
 
-def snapshot(directory: Path) -> None:
+def snapshot(directory: Path, font_ids: set[str] | None = None) -> None:
+    """只复制本次文字所用字体，并保留默认字体供缺字回退。"""
     directory.mkdir(parents=True, exist_ok=True)
+    selected = None if font_ids is None else font_ids | {default_id()}
     for item in catalog():
+        if selected is not None and item["id"] not in selected:
+            continue
         path = (config.ROOT / "fonts" if item["builtin"] else _directory()) / item["file"]
         shutil.copy2(path, directory / path.name)

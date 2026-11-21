@@ -1,0 +1,70 @@
+{
+  "license": "SIL Open Font License 1.1",
+  "fonts": [
+    {
+      "file": "SourceHanSansCN-Regular.otf",
+      "url": "https://raw.githubusercontent.com/adobe-fonts/source-han-sans/2.005R/SubsetOTF/CN/SourceHanSansCN-Regular.otf",
+      "license": "LICENSE-SourceHanSans.txt",
+      "bytes": 8429224,
+      "sha256": "e2bc8a2e7f37474b774fff8db758681ece40bb6947a90d571bce9dd60671a8e4",
+      "postscript_name": "SourceHanSansCN-Regular",
+      "sample_fallback_characters": ""
+    },
+    {
+      "file": "SourceHanSansCN-Bold.otf",
+      "url": "https://raw.githubusercontent.com/adobe-fonts/source-han-sans/2.005R/SubsetOTF/CN/SourceHanSansCN-Bold.otf",
+      "license": "LICENSE-SourceHanSans.txt",
+      "bytes": 8569308,
+      "sha256": "62383707c086a32f3afd5e293f34c7eff64c7fea31f579fdc6cbe34d920519a6",
+      "postscript_name": "SourceHanSansCN-Bold",
+      "sample_fallback_characters": ""
+    },
+    {
+      "file": "SourceHanSerifCN-Regular.otf",
+      "url": "https://raw.githubusercontent.com/adobe-fonts/source-han-serif/2.003R/SubsetOTF/CN/SourceHanSerifCN-Regular.otf",
+      "license": "LICENSE-SourceHanSerif.txt",
+      "bytes": 11626108,
+      "sha256": "3754ea669c530e2473354f8f6d9f79680a44d7e26ec7d00eeabee4a7e0753c5d",
+      "postscript_name": "SourceHanSerifCN-Regular",
+      "sample_fallback_characters": ""
+    },
+    {
+      "file": "SourceHanSerifCN-Bold.otf",
+      "url": "https://raw.githubusercontent.com/adobe-fonts/source-han-serif/2.003R/SubsetOTF/CN/SourceHanSerifCN-Bold.otf",
+      "license": "LICENSE-SourceHanSerif.txt",
+      "bytes": 12094680,
+      "sha256": "4ee555ae58b3d22f6a95c2c494f2c36b7cccfc1d2224635f6461a03756f0e3c1",
+      "postscript_name": "SourceHanSerifCN-Bold",
+      "sample_fallback_characters": ""
+    },
+    {
+      "file": "LXGWWenKai-Regular.ttf",
+      "url": "https://github.com/lxgw/LxgwWenKai/releases/download/v1.530/LXGWWenKai-Regular.ttf",
+      "license": "LICENSE-LXGWWenKai.txt",
+      "bytes": 25883568,
+      "sha256": "99934afbfd06af01f225eb6d64a0396f757fea26e4f778bfc1910489f7ec70da",
+      "postscript_name": "LXGWWenKai-Regular",
+      "sample_fallback_characters": ""
+    },
+    {
+      "file": "ZhuqueFangsong-Regular.ttf",
+      "url": "https://github.com/TrionesType/zhuque/releases/download/v0.212/ZhuqueFangsong-v0.212.zip",
+      "archive_entry": "ZhuqueFangsong-Regular.ttf",
+      "license": "LICENSE-ZhuqueFangsong.txt",
+      "bytes": 8824084,
+      "sha256": "558c62730844fe54ba220146ed62f859d4e2880188d92d985f8921c6e3743bc4",
+      "postscript_name": "ZhuqueFangsong-Regular",
+      "sample_fallback_characters": "哋喎"
+    },
+    {
+      "file": "ChillRoundFRegular.otf",
+      "url": "https://github.com/Warren2060/ChillRound/releases/download/v3.200/ChillRoundF_v3.200.zip",
+      "archive_entry": "ChillRoundF_v3.200/ChillRoundFRegular.otf",
+      "license": "LICENSE-ChillRound.txt",
+      "bytes": 6123836,
+      "sha256": "f017ad472e2a90092dbdb731421962327fb39281ceb61aad98c86d684d7ce53e",
+      "postscript_name": "ChillRoundFRegular",
+      "sample_fallback_characters": ""
+    }
+  ]
+}

@@ -854,7 +854,7 @@ def compose_segments(segs: list[Segment], work: Path, out: Path, progress=None,
 
     total = sum(s.v_dur for s in segs)
     build_ass(segs, total, work / "video.ass", design=design)
-    fonts.snapshot(work / "fonts")
+    fonts.snapshot(work / "fonts", {layer["font_id"] for layer in [design["subtitle"], *design["elements"]] if layer["enabled"]})
 
     if progress:
         progress(len(segs), len(segs), "合成字幕与音乐")

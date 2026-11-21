@@ -21,12 +21,12 @@ class LookToneTests(unittest.TestCase):
         self.assertEqual(result.returncode, 0, result.stderr.decode("utf-8", "replace"))
         return result.stdout
 
-    def test_new_settings_and_missing_sliders_default_to_fifty(self):
+    def test_tone_defaults_to_thirty_five_and_other_sliders_to_fifty(self):
         with tempfile.TemporaryDirectory() as folder, patch.object(config, "data_root", return_value=Path(folder)):
             settings = look.current()
             self.assertTrue(settings["enabled"])
             self.assertTrue(settings["normalize"])
-            self.assertEqual([settings[key] for key in ("smooth", "tone", "sharpen")], [.5, .5, .5])
+            self.assertEqual([settings[key] for key in ("smooth", "tone", "sharpen")], [.5, .35, .5])
             self.assertEqual(look.normalize({}), settings)
             custom = {**settings, "tone": .75, "sharpen": 0}
             look.save(custom)

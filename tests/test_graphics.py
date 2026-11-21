@@ -1,5 +1,6 @@
 import copy
 import json
+import re
 import subprocess
 import tempfile
 import unittest
@@ -69,6 +70,37 @@ class GraphicsTests(unittest.TestCase):
         self.assertEqual(self.client.delete(f"/api/fonts/{item['id']}").status_code, 200)
         self.assertEqual(self.client.get(f"/api/fonts/{item['id']}/file").status_code, 404)
         self.assertEqual(self.client.delete("/api/fonts/SourceHanSansCN-Heavy").status_code, 400)
+
+    def test_builtin_fonts_render_selected_faces_and_keep_only_needed_files(self):
+        items = self.client.get("/api/graphics").json()["fonts"]
+        builtin = [item for item in items if item["builtin"]]
+        self.assertEqual({item["file"] for item in builtin}, set(fonts.BUILTINS))
+        sources = json.loads((config.ROOT / "fonts" / "sources.json").read_text(encoding="utf-8"))
+        postscript = {item["file"]: item["postscript_name"] for item in sources["fonts"]}
+        pictures = set()
+        for item in builtin:
+            with self.subTest(font=item["id"]):
+                directory = self.root / item["id"]
+                directory.mkdir()
+                settings = graphics.normalize(graphics.defaults())
+                settings["subtitle"].update(font_id=item["id"], size=100, outline=0)
+                segment = render.Segment(Path("unused"), 0, 1, subs=[(0, 1, "巨航名表嘅哋啲喎")])
+                render.build_ass([segment], 1, directory / "sample.ass", design=settings)
+                fonts.snapshot(directory / "fonts", {item["id"]})
+                expected = {item["file"], fonts.resolve(fonts.default_id())[0].name}
+                self.assertEqual({path.name for path in (directory / "fonts").iterdir()}, expected)
+                result = subprocess.run([
+                    config.ffmpeg(), "-nostdin", "-v", "info", "-f", "lavfi", "-i", "color=black:s=360x640:d=1",
+                    "-vf", "subtitles=sample.ass:fontsdir=fonts", "-frames:v", "1", "-pix_fmt", "rgb24", "-f", "rawvideo", "pipe:1",
+                ], cwd=directory, capture_output=True)
+                log = result.stderr.decode("utf-8", "replace")
+                self.assertEqual(result.returncode, 0, log)
+                selected = postscript.get(item["file"], item["id"])
+                self.assertRegex(log, rf"fontselect:.*-> .*{re.escape(selected)}(?:,|\s|$)")
+                self.assertNotIn("failed to find any fallback", log)
+                self.assertGreater(max(result.stdout), 200)
+                pictures.add(result.stdout)
+        self.assertEqual(len(pictures), len(builtin))
         self.assertEqual(list((self.root / "fonts").iterdir()), [])
 
     def test_english_metadata_is_used_instead_of_windows_question_marks(self):

@@ -15,7 +15,7 @@ from pathlib import Path
 
 from . import cancellation, config
 
-DEFAULTS = {"enabled": True, "normalize": True, "smooth": 0.5, "tone": 0.5, "sharpen": 0.5}
+DEFAULTS = {"enabled": True, "normalize": True, "smooth": 0.5, "tone": 0.35, "sharpen": 0.5}
 
 
 def _path() -> Path:

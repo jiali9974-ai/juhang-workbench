@@ -78,13 +78,16 @@ export function FrameEditor({ outputs, source, revision, header }: {
   }, [setEditor])
   useEffect(() => { if (!editor) void fetchState() }, [editor, fetchState])
   const fontList = editor?.fonts
+  const fontSelection = editor ? [editor.design.subtitle, ...editor.design.elements]
+    .filter((layer) => layer.enabled).map((layer) => layer.font_id).sort().join("\0") : ""
   useEffect(() => {
     if (!fontList) return
     let live = true
-    Promise.all(fontList.map(loadFont)).then(() => { if (live) setFontError("") })
+    const required = new Set(["SourceHanSansCN-Heavy", ...fontSelection.split("\0")])
+    Promise.all(fontList.filter((font) => required.has(font.id)).map(loadFont)).then(() => { if (live) setFontError("") })
       .catch(() => { if (live) setFontError("字体预览加载失败，请检查网络后重试") })
     return () => { live = false }
-  }, [fontList])
+  }, [fontList, fontSelection])
 
   const timeline = Math.max(6, ...(editor?.design.elements.map((item) => item.end ?? item.start + 6) ?? []))
   useEffect(() => {

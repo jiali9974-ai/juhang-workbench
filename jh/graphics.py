@@ -240,7 +240,7 @@ def preview(data: dict, active_jobs: list[dict]) -> dict:
         if not output.is_file():
             segment = render.Segment(image, 0, 6, subs=render.timed_chunks(subtitle, 0, 6, config.load()["style"]["subtitle"]["max_chars_per_line"]))
             render.build_ass([segment], 6, directory / "preview.ass", design=settings)
-            fonts.snapshot(directory / "fonts")
+            fonts.snapshot(directory / "fonts", {layer["font_id"] for layer in [settings["subtitle"], *settings["elements"]] if layer["enabled"]})
             result = cancellation.run_process([
                 config.ffmpeg(), "-nostdin", "-hide_banner", "-loglevel", "error", "-y", "-loop", "1", "-i", str(image.resolve()),
                 "-vf", "subtitles=preview.ass:fontsdir=fonts", "-t", "6", "-an", "-r", "24",
